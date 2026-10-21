@@ -3123,7 +3123,26 @@ self.onmessage = function (e) {
 
         /* P2P */
         let p2pSetup = null, p2pSetupDrag = null, p2pSetupWaiting = false, p2pReceivedOffer = false, p2pLastSent = null;
-        function closeP2PSetupModal(){ document.getElementById('p2p-setup-modal').classList.remove('active'); }
+        function closeP2PSetupModal(){ document.getElementById('p2p-setup-modal')?.classList.remove('active'); }
+        function closeOnlineMenusAfterP2PConnect(){
+            // Hide the online connection controls once the direct peer connection is established.
+            document.getElementById('online-mode-panel')?.classList.remove('active');
+            const extraOnlinePanel=document.getElementById('kc-online-panel');
+            if(extraOnlinePanel) extraOnlinePanel.style.display='none';
+        }
+        function showGuestWaitingForHostSetup(){
+            p2pSetupWaiting=true; p2pReceivedOffer=false;
+            const status=document.getElementById('p2p-setup-status');
+            const ready=document.getElementById('p2p-setup-ready');
+            const accept=document.getElementById('p2p-setup-accept');
+            const controls=document.getElementById('p2p-setup-controls');
+            if(status) status.innerText='Connected to host. Please wait while the host configures the board and sends the game setup…';
+            if(ready) ready.style.display='none';
+            if(accept) accept.style.display='none';
+            // Guest cannot change the host's setup before receiving it.
+            if(controls) controls.querySelectorAll('select').forEach(el=>el.disabled=true);
+            document.getElementById('p2p-setup-modal')?.classList.add('active');
+        }
         function setupBoardClone(b){ return b.map(row=>row.map(p=>p?{...p}:null)); }
         function openNegotiationSetup(editable, offer){
             if(offer) p2pSetup={board:setupBoardClone(offer.board),turn:offer.turn,minutes:Number(offer.minutes||0)};
@@ -3131,9 +3150,10 @@ self.onmessage = function (e) {
             document.getElementById('p2p-setup-time').value=String(p2pSetup.minutes||0);
             document.getElementById('p2p-setup-turn').value=p2pSetup.turn||'w';
             const hasReceivedOffer = !!p2pReceivedOffer;
-            document.getElementById('p2p-setup-ready').style.display='flex';
+            document.getElementById('p2p-setup-ready').style.display=hasReceivedOffer?'none':'flex';
             document.getElementById('p2p-setup-accept').style.display=hasReceivedOffer?'flex':'none';
-            document.getElementById('p2p-setup-status').innerText = hasReceivedOffer ? 'Review proposal.' : 'Adjust and send.';
+            document.getElementById('p2p-setup-controls')?.querySelectorAll('select').forEach(el=>el.disabled=(!editable && !hasReceivedOffer));
+            document.getElementById('p2p-setup-status').innerText = hasReceivedOffer ? 'Setup received from host. Review the settings, then select Accept & Start.' : 'Host: adjust the board and settings, then send them to the client.';
             document.getElementById('p2p-setup-modal').classList.add('active');
         }
         function sendSetupProposal(){
@@ -3180,7 +3200,8 @@ self.onmessage = function (e) {
             p2pLastSent={board:setupBoardClone(p2pSetup.board),turn:p2pSetup.turn,minutes:p2pSetup.minutes};
             p2pReceivedOffer=true; p2pSetupWaiting=false;
             openNegotiationSetup(false);
-            document.getElementById('p2p-setup-status').innerText='Setup received from host. Review the board and settings, then select Accept & Start.';
+            document.getElementById('p2p-setup-controls')?.querySelectorAll('select').forEach(el=>el.disabled=false);
+            document.getElementById('p2p-setup-status').innerText='Setup received from host. Review the settings, then select Accept & Start.';
             appendChatMessage('System', 'Received the host game setup. Review it in the Game Setup window.');
         }
         // ---- Game Setup housekeeping (cancel / close / reopen) ----
@@ -3392,6 +3413,7 @@ self.onmessage = function (e) {
                 showP2PReconnectButton(false);
                 setOnlineDot(true);
                 setOnlineStatus(`Connected as ${myRole === 'w' ? 'White (Host)' : 'Black (Guest)'}`);
+                closeOnlineMenusAfterP2PConnect();
                 isBoardFlipped = (myRole === 'b'); renderBoard();
                 startP2PHeartbeat();
                 updateP2PSetupButton();
@@ -3401,19 +3423,18 @@ self.onmessage = function (e) {
                 } else {
                     appendChatMessage('System', `Connected as ${myRole === 'w' ? 'White / Host' : 'Black / Guest'}.`);
                     if (myRole === 'b') {
-                        appendChatMessage('System', 'Connected to host. Requesting the game setup…');
-                        // Explicit ready signal lets the host resend the proposal if its first
-                        // message was sent before the guest finished opening its data channel.
+                        appendChatMessage('System', 'Connected to host. Waiting for the host to configure and send the board setup…');
+                        setOnlineStatus('Connected — waiting for host board setup…');
+                        showGuestWaitingForHostSetup();
+                        // Signal readiness after the waiting screen is visible; host resends its setup.
                         try { p2pConn.send({ type: 'CLIENT_READY' }); } catch (e) {}
                     }
                     if (myRole === 'w') {
                         p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) };
                         openNegotiationSetup(true);
-                        setOnlineStatus('Player connected — sending board setup…');
-                        // Wait a moment for both data channels to settle, then send and retry.
-                        // The CLIENT_READY signal below also triggers a resend if needed.
-                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted) sendSetupProposal(); }, 300);
-                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted && !p2pReceivedOffer) sendSetupProposal(); }, 1400);
+                        document.getElementById('p2p-setup-status').innerText='Client connected. Adjust the board and settings, then click Ready — Send Setup.';
+                        setOnlineStatus('Client connected — configure and send board setup.');
+                        // Host explicitly reviews/configures the setup before sending it.
                     }
                 }
             });
@@ -3425,9 +3446,8 @@ self.onmessage = function (e) {
                 else if (data.type === 'CLIENT_READY') {
                     if (myRole === 'w' && !p2pGameStarted) {
                         if (!p2pSetup) p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) };
-                        // Use the most recently selected host setup when available.
-                        setOnlineStatus('Guest connected — sending game setup…');
-                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted) sendSetupProposal(); }, 100);
+                        setOnlineStatus('Client is waiting — configure the board and click Ready — Send Setup.');
+                        if (!document.getElementById('p2p-setup-modal')?.classList.contains('active')) openNegotiationSetup(true);
                     }
                 }
                 else if (data.type === 'MOVE') executeMove(data.fr, data.fc, data.tr, data.tc, true);
