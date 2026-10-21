@@ -3190,32 +3190,99 @@ self.onmessage = function (e) {
         function setOnlineDot(connected) { document.getElementById('online-dot')?.classList.toggle('connected', !!connected); }
         function showP2PReconnectButton(show) { const el = document.getElementById('p2p-reconnect-btn'); if (el) el.style.display = show ? 'flex' : 'none'; }
 
+        function closeExistingP2P() {
+            try { if (p2pConn) p2pConn.close(); } catch (e) {}
+            try { if (peer && !peer.destroyed) peer.destroy(); } catch (e) {}
+            p2pConn = null; peer = null;
+            stopP2PHeartbeat();
+            if (p2pReconnectTimer) { clearTimeout(p2pReconnectTimer); p2pReconnectTimer = null; }
+            setOnlineDot(false);
+        }
+        function peerErrorMessage(err) {
+            const type = err && err.type ? String(err.type) : 'unknown';
+            const messages = {
+                'peer-unavailable': 'Room not found. Check the room code and make sure the host is still online.',
+                'unavailable-id': 'This room code is already in use. Please create a new room.',
+                'invalid-id': 'Invalid room code. Ask the host to create a new room.',
+                'network': 'PeerJS network connection failed. Check both devices’ internet connections and try again.',
+                'socket-error': 'Could not reach the PeerJS signaling server. Please retry.',
+                'server-error': 'PeerJS signaling server error. Please retry in a moment.',
+                'webrtc': 'The devices could not establish a direct connection. Try another network or browser.',
+                'browser-incompatible': 'This browser does not support the required peer connection.'
+            };
+            return (messages[type] || ('Connection error (' + type + '). Please retry and check the browser console.'));
+        }
         function bindPeerLifecycle(p) {
-            p.on('disconnected', () => { if (!p.destroyed) p.reconnect(); });
+            p.on('disconnected', () => {
+                if (!p.destroyed) {
+                    setOnlineStatus('Signaling disconnected — reconnecting…');
+                    try { p.reconnect(); } catch (e) {}
+                }
+            });
             p.on('error', err => {
+                console.error('[OUK KHMER PeerJS]', err && err.type, err);
                 if (err && err.type === 'peer-unavailable') {
                     if (p2pGameStarted) scheduleP2PReconnect();
+                    else setOnlineStatus(peerErrorMessage(err));
                     return;
                 }
                 if (p2pGameStarted) handleP2PDrop();
-                else setOnlineStatus('Connection error. Please try again.');
+                else setOnlineStatus(peerErrorMessage(err));
             });
         }
         function hostP2PGame() {
-            p2pRoomCode = 'ouk-' + Math.random().toString(36).substring(2, 6);
-            myRole = 'w';
-            peer = new Peer(p2pRoomCode);
-            bindPeerLifecycle(peer);
-            peer.on('open', id => setOnlineStatus(`Hosting — Code: ${id}`));
-            peer.on('connection', conn => { p2pConn = conn; setupP2PConnection(); });
+            if (typeof Peer !== 'function') { setOnlineStatus('PeerJS did not load. Refresh the page and try again.'); return; }
+            closeExistingP2P();
+            p2pRoomCode = 'ouk-' + Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+            myRole = 'w'; p2pGameStarted = false;
+            setOnlineStatus('Creating room…');
+            try {
+                peer = new Peer(p2pRoomCode, { debug: 1 });
+                const thisPeer = peer;
+                bindPeerLifecycle(peer);
+                peer.on('open', id => {
+                    if (peer !== thisPeer) return;
+                    p2pRoomCode = id;
+                    setOnlineStatus('Hosting — Code: ' + id + ' — waiting for opponent…');
+                });
+                peer.on('connection', conn => {
+                    if (peer !== thisPeer) { try { conn.close(); } catch(e){} return; }
+                    if (p2pConn && p2pConn.open) { try { conn.close(); } catch(e){} return; }
+                    p2pConn = conn; setupP2PConnection();
+                });
+            } catch (e) { console.error('[OUK KHMER] Host error', e); setOnlineStatus('Could not create room. Refresh and try again.'); }
         }
         function showJoinPrompt() {
-            const code = prompt("Enter Host Room Code:"); if (!code) return;
-            p2pRoomCode = code.trim();
-            myRole = 'b';
-            peer = new Peer();
-            bindPeerLifecycle(peer);
-            peer.on('open', () => { p2pConn = peer.connect(p2pRoomCode); setupP2PConnection(); });
+            if (typeof Peer !== 'function') { setOnlineStatus('PeerJS did not load. Refresh the page and try again.'); return; }
+            const entered = prompt('Enter the host room code (for example: ouk-ab12cd):');
+            if (!entered) return;
+            p2pRoomCode = entered.trim().replace(/\s+/g, '');
+            if (!/^[a-zA-Z0-9_-]{3,100}$/.test(p2pRoomCode)) { setOnlineStatus('Invalid room code. Copy the complete code shown by the host.'); alert('Room code format is invalid. Copy the complete room code exactly as displayed.'); return; }
+            closeExistingP2P();
+            myRole = 'b'; p2pGameStarted = false;
+            setOnlineStatus('Connecting to room ' + p2pRoomCode + '…');
+            try {
+                peer = new Peer(undefined, { debug: 1 });
+                const thisPeer = peer;
+                bindPeerLifecycle(peer);
+                thisPeer.on('open', () => {
+                    if (peer !== thisPeer) return;
+                    setOnlineStatus('Found signaling server — contacting host…');
+                    try {
+                        p2pConn = thisPeer.connect(p2pRoomCode, { reliable: true, serialization: 'json' });
+                        const thisConn = p2pConn;
+                        setupP2PConnection();
+                        const timeout = setTimeout(() => {
+                            if (p2pConn === thisConn && !thisConn.open) {
+                                setOnlineStatus('Still waiting for host. Confirm the host page remains open and recopy the room code.');
+                                try { thisConn.close(); } catch(e) {}
+                            }
+                        }, 15000);
+                        thisConn.on('open', () => clearTimeout(timeout));
+                        thisConn.on('close', () => clearTimeout(timeout));
+                    } catch (e) { console.error('[OUK KHMER] Join error', e); setOnlineStatus('Could not start the room connection. Try again.'); }
+                });
+            } catch (e) { console.error('[OUK KHMER] Join peer error', e); setOnlineStatus('Could not connect to PeerJS. Refresh and try again.'); }
         }
         function manualP2PReconnect() {
             p2pReconnectAttempts = 0;
