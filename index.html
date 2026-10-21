@@ -737,7 +737,7 @@
                     <div class="dropdown-section">
                         <h4>Animation</h4>
                         <div class="setting-control">
-                            <label>Slide Speed</label>
+                            <label for="settings-anim-speed">Slide Speed</label>
                             <select id="settings-anim-speed" onchange="setAnimSpeed(this.value)">
                                 <option value="0">Instant</option>
                                 <option value="180">Fast</option>
@@ -749,7 +749,7 @@
                     <div class="dropdown-section">
                         <h4>⏱️ Timer</h4>
                         <div class="setting-control" style="margin-bottom:6px;">
-                            <label>Turn Timer (per move)</label>
+                            <label for="settings-turn-time">Turn Timer (per move)</label>
                             <select id="settings-turn-time" onchange="setTurnTimeControl(this.value)">
                                 <option value="30">30 seconds</option>
                                 <option value="60">1 minute</option>
@@ -760,7 +760,7 @@
                             </select>
                         </div>
                         <div class="setting-control">
-                            <label>Match Timer (total)</label>
+                            <label for="settings-match-time">Match Timer (total)</label>
                             <select id="settings-match-time" onchange="setMatchTimeControl(this.value)">
                                 <option value="1">1 min</option>
                                 <option value="3">3 min</option>
@@ -3452,9 +3452,9 @@ self.onmessage = function (e) {
 </style>
 <button id="kc-online-launch" type="button">🌐 Online Play</button>
 <div id="kc-online-panel" role="dialog" aria-modal="true"><div class="kc-card"><div class="kc-row" style="justify-content:space-between;align-items:center"><h2>Khmer Chess Online</h2><button id="kc-online-close">Close</button></div>
-<p>Room-code multiplayer prototype. Configure Supabase in <code>online-config.js</code> before publishing.</p><label>Your account ID</label><input id="kc-account" readonly><div class="kc-row"><button id="kc-copy-account">Copy account ID</button><button id="kc-new-room">Create room</button></div>
-<label>Room code</label><input id="kc-room" placeholder="Enter room code"><div class="kc-row"><button id="kc-join-room">Join room</button><button id="kc-leave-room">Leave room</button></div>
-<label>Challenge account ID</label><input id="kc-target-account" placeholder="Opponent account ID"><button id="kc-challenge-account">Challenge account</button><div id="kc-online-status">Configure Supabase to enable online play.</div><p style="font-size:12px">Never put a Supabase service-role key in browser code.</p></div></div>
+<p>Room-code multiplayer prototype. Configure Supabase in <code>online-config.js</code> before publishing.</p><label for="kc-account">Your account ID</label><input id="kc-account" readonly><div class="kc-row"><button id="kc-copy-account">Copy account ID</button><button id="kc-new-room">Create room</button></div>
+<label for="kc-room">Room code</label><input id="kc-room" placeholder="Enter room code"><div class="kc-row"><button id="kc-join-room">Join room</button><button id="kc-leave-room">Leave room</button></div>
+<label for="kc-target-account">Challenge account ID</label><input id="kc-target-account" placeholder="Opponent account ID"><button id="kc-challenge-account">Challenge account</button><div id="kc-online-status">Configure Supabase to enable online play.</div><p style="font-size:12px">Never put a Supabase service-role key in browser code.</p></div></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="./online-config.js"></script>
 <script>
 (()=>{const $=id=>document.getElementById(id),panel=$('kc-online-panel'),status=$('kc-online-status');let account=localStorage.getItem('khmerChessAccountIdV1');if(!account){account='KC-'+Math.random().toString(36).slice(2,6).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase();localStorage.setItem('khmerChessAccountIdV1',account)}$('kc-account').value=account;let client=null,channel=null,room='',role=null;const say=t=>status.textContent=t;const cfg=window.KHMER_CHESS_SUPABASE||{};
