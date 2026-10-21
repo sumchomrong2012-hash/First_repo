@@ -3142,15 +3142,46 @@ self.onmessage = function (e) {
             p2pSetup.turn=document.getElementById('p2p-setup-turn').value;
             const msg={board:setupBoardClone(p2pSetup.board),turn:p2pSetup.turn,minutes:p2pSetup.minutes};
             p2pLastSent=msg;p2pSetupWaiting=true;p2pReceivedOffer=false;
-            p2pConn.send({type:'SETUP_PROPOSAL',...msg});
-            document.getElementById('p2p-setup-status').innerText='Sent. Waiting...';
-            document.getElementById('p2p-setup-ready').style.display='none'; document.getElementById('p2p-setup-accept').style.display='none';
+            try {
+                p2pConn.send({type:'SETUP_PROPOSAL',...msg});
+                document.getElementById('p2p-setup-status').innerText='Setup sent. Waiting for the other player to review or accept. You can change settings and send an updated setup.';
+                const readyBtn=document.getElementById('p2p-setup-ready');
+                if (readyBtn) { readyBtn.style.display='flex'; readyBtn.textContent='Send / Update Setup'; }
+                const acceptBtn=document.getElementById('p2p-setup-accept');
+                if (acceptBtn) acceptBtn.style.display='none';
+                appendChatMessage('System', 'Game setup sent to the other player.');
+            } catch (err) {
+                document.getElementById('p2p-setup-status').innerText='Could not send setup. Check the connection and try again.';
+                appendChatMessage('System', 'Failed to send game setup: ' + (err?.message || 'connection error'));
+            }
         }
-        function acceptSetupProposal(){ if(!p2pConn?.open||!p2pLastSent)return; p2pConn.send({type:'SETUP_ACCEPT'}); p2pSetupWaiting=true; document.getElementById('p2p-setup-accept').style.display='none'; }
+        function acceptSetupProposal(){
+            if(!p2pConn?.open||!p2pLastSent){
+                document.getElementById('p2p-setup-status').innerText='Not connected or no setup received yet.';
+                return;
+            }
+            try {
+                p2pConn.send({type:'SETUP_ACCEPT'});
+                p2pSetupWaiting=true;
+                document.getElementById('p2p-setup-status').innerText='Accepted. Waiting for the host to start the game…';
+                document.getElementById('p2p-setup-accept').style.display='none';
+                appendChatMessage('System', 'Game setup accepted. Waiting for the host to start.');
+            } catch(err) {
+                document.getElementById('p2p-setup-status').innerText='Could not send acceptance. Please reconnect.';
+            }
+        }
         function receiveSetupProposal(data){
             if (p2pGameStarted && !gameOver) return;
-            if (!data || !isValidRemoteBoard(data.board)) { appendChatMessage('System', 'Received an invalid game setup from the other player — ignored.'); return; }
-            p2pSetup={board:setupBoardClone(data.board),turn:data.turn,minutes:Number(data.minutes||0)}; p2pLastSent={...p2pSetup}; p2pReceivedOffer=true; p2pSetupWaiting=false; openNegotiationSetup(false);
+            if (!data || !isValidRemoteBoard(data.board)) {
+                appendChatMessage('System', 'Received an invalid game setup from the other player — ignored.');
+                return;
+            }
+            p2pSetup={board:setupBoardClone(data.board),turn:data.turn === 'b' ? 'b' : 'w',minutes:Math.max(0,Number(data.minutes)||0)};
+            p2pLastSent={board:setupBoardClone(p2pSetup.board),turn:p2pSetup.turn,minutes:p2pSetup.minutes};
+            p2pReceivedOffer=true; p2pSetupWaiting=false;
+            openNegotiationSetup(false);
+            document.getElementById('p2p-setup-status').innerText='Setup received from host. Review the board and settings, then select Accept & Start.';
+            appendChatMessage('System', 'Received the host game setup. Review it in the Game Setup window.');
         }
         // ---- Game Setup housekeeping (cancel / close / reopen) ----
         function resetSetupNegotiation() { p2pSetupWaiting = false; p2pReceivedOffer = false; p2pLastSent = null; }
@@ -3370,7 +3401,13 @@ self.onmessage = function (e) {
                 } else {
                     appendChatMessage('System', `Connected as ${myRole === 'w' ? 'White / Host' : 'Black / Guest'}.`);
                     if (myRole === 'b') appendChatMessage('System', 'Waiting for the host to send the game setup...');
-                    if (myRole === 'w') { p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) }; openNegotiationSetup(true); }
+                    if (myRole === 'w') {
+                        p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) };
+                        openNegotiationSetup(true);
+                        // Send an initial board/config snapshot automatically so the guest does not
+                        // remain stuck waiting. The host can still adjust the setup and resend it.
+                        sendSetupProposal();
+                    }
                 }
             });
             p2pConn.on('data', data => {
@@ -3383,7 +3420,12 @@ self.onmessage = function (e) {
                 else if (data.type === 'SETUP_PROPOSAL') receiveSetupProposal(data);
                 else if (data.type === 'SETUP_CANCEL') receiveSetupCancel();
                 else if (data.type === 'SETUP_ACCEPT') { if (myRole === 'w') confirmStartAfterAcceptance(); else { applyP2PStart(p2pLastSent); p2pConn.send({type:'SETUP_FINAL_ACK'}); } }
-                else if (data.type === 'SETUP_FINAL') { p2pLastSent = { board: setupBoardClone(data.board), turn: data.turn, minutes: Number(data.minutes||0) }; applyP2PStart(p2pLastSent); p2pConn.send({type:'SETUP_FINAL_ACK'}); }
+                else if (data.type === 'SETUP_FINAL') {
+                    if (!isValidRemoteBoard(data.board)) { appendChatMessage('System', 'The final board setup was invalid. Ask the host to resend setup.'); return; }
+                    p2pLastSent = { board: setupBoardClone(data.board), turn: data.turn === 'b' ? 'b' : 'w', minutes: Math.max(0,Number(data.minutes)||0) };
+                    applyP2PStart(p2pLastSent);
+                    try { p2pConn.send({type:'SETUP_FINAL_ACK'}); } catch(e) {}
+                }
                 else if (data.type === 'SETUP_FINAL_ACK' && myRole === 'w') applyP2PStart(p2pLastSent);
                 else if (data.type === 'COUNT_REQUEST') { countingActive=true; countingUsedOnce=true; countingRegime=data.regime||'board'; countingAttacker=data.attacker; countingDefender=data.defender; countingMax=data.max; countingTrueLimit=(typeof data.trueLimit==='number')?data.trueLimit:64; countingRemaining=Math.max(0,Math.min(data.remaining,countingTrueLimit)); countingLastDefenderCount=data.lastCount; showCountingBadge(); updateUI(); }
                 else if (data.type === 'COUNT_TICK') { if(data.regime) countingRegime = data.regime; if(typeof data.max==='number') countingMax = data.max; if(typeof data.trueLimit==='number') countingTrueLimit = data.trueLimit; countingRemaining = Math.max(0, Math.min(data.remaining, countingTrueLimit)); if(countingRemaining<=0){gameOver=true;stopTimer();hideCountingBadge();declareCountingExpiry();} else showCountingBadge(); updateMoveStatus(); }
@@ -3516,6 +3558,22 @@ self.onmessage = function (e) {
 #kc-online-panel{position:fixed;inset:0;z-index:99999;background:#06101eee;display:none;align-items:center;justify-content:center;padding:16px;font:14px system-ui;color:#eff6ff}
 #kc-online-panel .kc-card{width:min(520px,100%);max-height:90vh;overflow:auto;background:#111d2d;border:1px solid #35516e;border-radius:18px;padding:20px}
 #kc-online-panel h2{margin:0;font-size:21px}#kc-online-panel p{color:#b7c7da;line-height:1.45}#kc-online-panel input{width:100%;box-sizing:border-box;background:#07111e;color:white;border:1px solid #49627d;border-radius:9px;padding:11px;margin:5px 0 10px}#kc-online-panel button{border:1px solid #42617f;border-radius:9px;background:#19334d;color:white;padding:10px 12px;margin:3px;cursor:pointer}#kc-online-panel .kc-row{display:flex;gap:8px;flex-wrap:wrap}#kc-online-status{padding:9px;background:#07111e;border-radius:9px;margin:12px 0;color:#a5e5ff;overflow-wrap:anywhere}
+/* Desktop viewport fix: keep side-panel controls reachable on short PC screens. */
+@media screen and (min-width: 951px) {
+  html, body { overflow: hidden; }
+  .main-container { min-height: 0; overflow-y: auto !important; overflow-x: hidden !important; scrollbar-gutter: stable; }
+  .panel, .side-panel { min-height: 0; overflow-y: auto !important; overflow-x: hidden !important; overscroll-behavior: contain; }
+  .online-mode-panel { flex-shrink: 0 !important; min-width: 0; }
+  .online-actions { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .online-actions .btn { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+}
+@media screen and (min-width: 951px) and (max-height: 760px) {
+  :root { --panel-pad: 7px; --panel-gap: 5px; --center-gap: 5px; }
+  .online-mode-panel { padding: 7px 9px !important; gap: 5px !important; }
+  .online-mode-title { font-size: 11px !important; }
+  .online-status-bar { padding: 4px 7px !important; }
+  .online-actions .btn { min-height: 32px !important; padding: 4px 7px !important; }
+}
 </style>
 <button id="kc-online-launch" type="button">🌐 Online Play</button>
 <div id="kc-online-panel" role="dialog" aria-modal="true"><div class="kc-card"><div class="kc-row" style="justify-content:space-between;align-items:center"><h2>Khmer Chess Online</h2><button id="kc-online-close">Close</button></div>
