@@ -3144,7 +3144,6 @@ self.onmessage = function (e) {
             document.getElementById('p2p-setup-modal')?.classList.add('active');
         }
         function setupBoardClone(b){ return b.map(row=>row.map(p=>p?{...p}:null)); }
-        function sendOnlineSetupMessage(message){ if(p2pConn?.open){p2pConn.send(message);return true;} if(window.KCOnlineBridge?.send){window.KCOnlineBridge.send(message);return true;} return false; }
         function openNegotiationSetup(editable, offer){
             if(offer) p2pSetup={board:setupBoardClone(offer.board),turn:offer.turn,minutes:Number(offer.minutes||0)};
             if(!p2pSetup) p2pSetup={board:setupBoardClone(boardState),turn:turn,minutes:5};
@@ -3157,6 +3156,11 @@ self.onmessage = function (e) {
             document.getElementById('p2p-setup-status').innerText = hasReceivedOffer ? 'Setup received from host. Review the settings, then select Accept & Start.' : 'Host: adjust the board and settings, then send them to the client.';
             document.getElementById('p2p-setup-modal').classList.add('active');
         }
+        function sendOnlineSetupMessage(message){
+            if(p2pConn?.open){ try { p2pConn.send(message); return true; } catch(e) { console.error(e); return false; } }
+            if(window.KCOnlineBridge?.send){ return window.KCOnlineBridge.send(message) === true; }
+            return false;
+        }
         function sendSetupProposal(){
             if((!p2pConn?.open&&!window.KCOnlineBridge?.send)||!p2pSetup)return;
             p2pSetup.minutes=Number(document.getElementById('p2p-setup-time').value||0);
@@ -3164,7 +3168,7 @@ self.onmessage = function (e) {
             const msg={board:setupBoardClone(p2pSetup.board),turn:p2pSetup.turn,minutes:p2pSetup.minutes};
             p2pLastSent=msg;p2pSetupWaiting=true;p2pReceivedOffer=false;
             try {
-                if(!sendOnlineSetupMessage({type:'SETUP_PROPOSAL',...msg})) throw new Error('No online transport');
+                if(!sendOnlineSetupMessage({type:'SETUP_PROPOSAL',...msg})) throw new Error('Online channel is not ready. Please wait and try again.');
                 document.getElementById('p2p-setup-status').innerText='Setup sent. Waiting for the other player to review or accept. You can change settings and send an updated setup.';
                 const readyBtn=document.getElementById('p2p-setup-ready');
                 if (readyBtn) { readyBtn.style.display='flex'; readyBtn.textContent='Send / Update Setup'; }
@@ -3182,7 +3186,7 @@ self.onmessage = function (e) {
                 return;
             }
             try {
-                if(!sendOnlineSetupMessage({type:'SETUP_ACCEPT'})) throw new Error('No online transport');
+                if(!sendOnlineSetupMessage({type:'SETUP_ACCEPT'})) throw new Error('Online channel is not ready. Please try again.');
                 p2pSetupWaiting=true;
                 document.getElementById('p2p-setup-status').innerText='Accepted. Waiting for the host to start the game…';
                 document.getElementById('p2p-setup-accept').style.display='none';
@@ -3216,7 +3220,7 @@ self.onmessage = function (e) {
             b.style.display = (currentMode === 'online' && p2pConn && p2pConn.open && (!p2pGameStarted || gameOver)) ? 'inline-flex' : 'none';
         }
         function p2pCancelSetup() {
-            try { sendOnlineSetupMessage({ type: 'SETUP_CANCEL' }); } catch (e) {}
+            if (p2pConn && p2pConn.open) { try { p2pConn.send({ type: 'SETUP_CANCEL' }); } catch (e) {} }
             resetSetupNegotiation(); closeP2PSetupModal();
             appendChatMessage('System', 'Game setup closed. Tap "Game Setup" to open it again.');
             updateP2PSetupButton();
@@ -3478,7 +3482,7 @@ self.onmessage = function (e) {
             p2pConn.on('close', () => { if (p2pGameStarted) handleP2PDrop(); else { setOnlineDot(false); setOnlineStatus('Disconnected'); appendChatMessage('System', 'The other player disconnected.'); cleanupSetupAfterDrop(); } });
             p2pConn.on('error', () => { if (p2pGameStarted) handleP2PDrop(); else { setOnlineStatus('Connection error. Please try again.'); cleanupSetupAfterDrop(); } });
         }
-        function confirmStartAfterAcceptance() { if((!p2pConn?.open&&!window.KCOnlineBridge?.send)||!p2pLastSent)return; if(sendOnlineSetupMessage({type:'SETUP_FINAL',...p2pLastSent})) applyP2PStart(p2pLastSent); }
+        function confirmStartAfterAcceptance() { if((!p2pConn?.open&&!window.KCOnlineBridge?.send)||!p2pLastSent)return; if(!sendOnlineSetupMessage({type:'SETUP_FINAL',...p2pLastSent})){document.getElementById('p2p-setup-status').innerText='Could not send final setup. Please try again.';return;} applyP2PStart(p2pLastSent); }
         const VALID_PIECE_TYPES = new Set(['k','q','r','b','n','p','u']);
         function isValidRemoteBoard(b) {
             if (!Array.isArray(b) || b.length !== 8) return false;
@@ -3506,14 +3510,6 @@ self.onmessage = function (e) {
         document.getElementById('p2p-setup-ready')?.addEventListener('click', sendSetupProposal);
         document.getElementById('p2p-setup-accept')?.addEventListener('click', acceptSetupProposal);
         document.getElementById('p2p-setup-cancel')?.addEventListener('click', p2pCancelSetup);
-        window.kcReceiveSetupMessage = function(data){
-            if(!data||typeof data.type!=='string')return;
-            if(data.type==='SETUP_PROPOSAL') receiveSetupProposal(data);
-            else if(data.type==='SETUP_CANCEL') receiveSetupCancel();
-            else if(data.type==='SETUP_ACCEPT'){ if(myRole==='w') confirmStartAfterAcceptance(); else { applyP2PStart(p2pLastSent); sendOnlineSetupMessage({type:'SETUP_FINAL_ACK'}); } }
-            else if(data.type==='SETUP_FINAL'){ if(!isValidRemoteBoard(data.board))return; p2pLastSent={board:setupBoardClone(data.board),turn:data.turn==='b'?'b':'w',minutes:Math.max(0,Number(data.minutes)||0)}; applyP2PStart(p2pLastSent); sendOnlineSetupMessage({type:'SETUP_FINAL_ACK'}); }
-            else if(data.type==='SETUP_FINAL_ACK'&&myRole==='w') applyP2PStart(p2pLastSent);
-        };
 
         function sendChatMessage() { const input = document.getElementById('chat-input'); const text = input.value.trim(); if (!text || currentMode !== 'online') return; appendChatMessage("You", text); if (p2pConn && p2pConn.open) p2pConn.send({ type: 'CHAT', text }); input.value = ''; }
         function sendTemplateMessage(text) { if (currentMode !== 'online') { alert('Chat is available in Online mode only.'); return; } appendChatMessage("You", text); if (p2pConn && p2pConn.open) p2pConn.send({ type: 'CHAT', text }); }
@@ -3626,38 +3622,122 @@ self.onmessage = function (e) {
 <label for="kc-target-account">Challenge account ID</label><input id="kc-target-account" placeholder="Opponent account ID"><button id="kc-challenge-account">Challenge account</button><div id="kc-online-status">Configure Supabase to enable online play.</div><p style="font-size:12px">Never put a Supabase service-role key in browser code.</p></div></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="./online-config.js"></script>
 <script>
-(()=>{
- const $=id=>document.getElementById(id),panel=$('kc-online-panel'),status=$('kc-online-status');
- let account=localStorage.getItem('khmerChessAccountIdV1');if(!account){account='KC-'+Math.random().toString(36).slice(2,6).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase();localStorage.setItem('khmerChessAccountIdV1',account)}$('kc-account').value=account;
- let client=null,channel=null,room='',role=null,opponentReady=false;const say=t=>{if(status)status.textContent=t};const cfg=window.KHMER_CHESS_SUPABASE||{};
- function init(){if(!window.supabase||!cfg.url||!cfg.anonKey||cfg.url.includes('YOUR_')){say('Setup required: edit online-config.js with Supabase URL and public key.');return false}if(!client)client=window.supabase.createClient(cfg.url,cfg.anonKey);return true}
- function send(payload){if(!channel||!room||!role)return false;channel.send({type:'broadcast',event:'game',payload:{kind:'protocol',from:account,room,message:payload}});return true}
- window.KCOnlineBridge={send, get connected(){return !!(channel&&room&&role&&opponentReady)}, get role(){return role}, get room(){return room}};
+(()=> {
+ const $=id=>document.getElementById(id), panel=$('kc-online-panel'), status=$('kc-online-status');
+ let account=localStorage.getItem('khmerChessAccountIdV1');
+ if(!account){account='KC-'+Math.random().toString(36).slice(2,6).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase();localStorage.setItem('khmerChessAccountIdV1',account)}
+ $('kc-account').value=account;
+ let client=null,channel=null,room='',role=null,opponentReady=false,setupFlowOpened=false,subscribed=false;
+ const say=t=>{if(status)status.textContent=t};
+ const cfg=window.KHMER_CHESS_SUPABASE||{};
+ function init(){
+   if(!window.supabase||!cfg.url||!cfg.anonKey||cfg.url.includes('YOUR_')){say('Setup required: edit online-config.js with your Supabase URL and public anon/publishable key.');return false}
+   if(!client)client=window.supabase.createClient(cfg.url,cfg.anonKey);
+   return true;
+ }
+ function closeMenus(){
+   if(typeof closeOnlineMenusAfterP2PConnect==='function')closeOnlineMenusAfterP2PConnect();
+   else if(panel)panel.style.display='none';
+ }
  function enterSetupFlow(){
-   if(!opponentReady)return;
-   if(typeof closeOnlineMenusAfterP2PConnect==='function')closeOnlineMenusAfterP2PConnect();else if(panel)panel.style.display='none';
-   try{currentMode='online';if(typeof updateP2PSetupButton==='function')updateP2PSetupButton();}catch(e){}
+   if(!opponentReady||setupFlowOpened)return;
+   setupFlowOpened=true; closeMenus();
+   try{currentMode='online'; if(typeof updateP2PSetupButton==='function')updateP2PSetupButton();}catch(e){}
    if(role==='w'){
-     try{p2pGameStarted=false;myRole='w';p2pSetup={board:setupBoardClone(boardState),turn:'w',minutes:Number($('settings-match-time')?.value||20)};p2pReceivedOffer=false;openNegotiationSetup(true);$('p2p-setup-status').innerText='Both players connected. Host: configure the board and settings, then click Ready — Send Setup.';say('Opponent connected. Configure and send the board setup.');}catch(e){say('Connected as host, but could not open setup. Please use Game Setup.');}
+     try{
+       p2pGameStarted=false;myRole='w';
+       p2pSetup={board:setupBoardClone(boardState),turn:'w',minutes:Number($('settings-match-time')?.value||20)};
+       p2pReceivedOffer=false;
+       openNegotiationSetup(true);
+       $('p2p-setup-status').innerText='Opponent connected. Configure the board and settings, then click Ready — Send Setup.';
+       say('Opponent connected. Configure and send the board setup.');
+     }catch(e){say('Connected as host, but could not open setup: '+e.message)}
    }else{
-     try{p2pGameStarted=false;myRole='b';showGuestWaitingForHostSetup();say('Connected. Waiting for host board setup…');}catch(e){say('Connected as guest. Waiting for host setup…');}
+     try{
+       p2pGameStarted=false;myRole='b';
+       showGuestWaitingForHostSetup();
+       say('Connected. Waiting for host board setup…');
+     }catch(e){say('Connected as guest, but could not open waiting screen: '+e.message)}
    }
  }
- function connect(code,host){if(!init())return;if(channel)client.removeChannel(channel);room=code.toUpperCase();role=host?'w':'b';opponentReady=false;channel=client.channel('khmer-chess-'+room,{config:{broadcast:{self:false},presence:{key:account}}});
-   channel.on('broadcast',{event:'game'},({payload})=>{
-     if(!payload||payload.from===account||payload.room&&payload.room!==room)return;
-     if(payload.kind==='hello'){
-       if(role==='w'){opponentReady=true;channel.send({type:'broadcast',event:'game',payload:{kind:'hello_ack',from:account,to:payload.from,room}});enterSetupFlow();}
-     }else if(payload.kind==='hello_ack'&&payload.to===account){opponentReady=true;say('Opponent connected in room '+room+'. Opening game setup…');enterSetupFlow();}
-     else if(payload.kind==='protocol'&&payload.message){const m=payload.message;if(m.type==='MOVE'){const v=m.move;try{if(v&&typeof executeMove==='function')executeMove(v.fr,v.fc,v.tr,v.tc,true)}catch(e){say('Move sync error: '+e.message)}}else if(typeof window.kcReceiveSetupMessage==='function')window.kcReceiveSetupMessage(m);}
-     else if(payload.kind==='move'&&(!payload.to||payload.to===account)){let m=payload.move;try{if(m&&typeof executeMove==='function')executeMove(m.fr,m.fc,m.tr,m.tc,true);say('Received opponent move. Room '+room)}catch(e){say('Move sync error: '+e.message)}}
-   }).subscribe(s=>{if(s==='SUBSCRIBED'){say('Connected to '+room+' as '+(role==='w'?'White':'Black')+'. Waiting for opponent…');channel.send({type:'broadcast',event:'game',payload:{kind:'hello',from:account,room}})}else if(s==='CHANNEL_ERROR'||s==='TIMED_OUT')say('Connection failed. Check Supabase Realtime configuration.')});$('kc-room').value=room;
+ function send(payload){
+   if(!channel||!room||!role||!subscribed||!opponentReady){say('Online channel is not ready; wait until the opponent is connected.');return false}
+   try{
+     const result=channel.send({type:'broadcast',event:'game',payload:{kind:'protocol',from:account,room,message:payload}});
+     if(result&&typeof result.then==='function')result.then(v=>{if(v&&v!=='ok')console.warn('Supabase broadcast status:',v)}).catch(e=>{console.error('Supabase send failed',e);say('Could not send setup message. Check connection and retry.')});
+     return true;
+   }catch(e){console.error('Supabase broadcast failed',e);say('Could not send setup message: '+(e.message||'connection error'));return false}
  }
- $('kc-online-launch').onclick=()=>{panel.style.display='flex';init()};$('kc-online-close').onclick=()=>panel.style.display='none';$('kc-copy-account').onclick=async()=>{try{await navigator.clipboard.writeText(account);say('Account ID copied')}catch(e){say('Your account ID: '+account)}};
- $('kc-new-room').onclick=()=>connect(Math.random().toString(36).slice(2,8).toUpperCase(),true);$('kc-join-room').onclick=()=>{let c=$('kc-room').value.trim();if(c)connect(c,false);else say('Enter a room code first')};
- $('kc-leave-room').onclick=()=>{if(channel&&client)client.removeChannel(channel);channel=null;room='';role=null;opponentReady=false;say('Disconnected')};$('kc-challenge-account').onclick=()=>say('Direct account-ID challenge needs a secure account directory backend. For now, share a room code.');
- // Broadcast local moves only after the other player has completed the room handshake.
+ window.KCOnlineBridge={send,get connected(){return !!(channel&&subscribed&&opponentReady&&role&&room)},get role(){return role},get room(){return room}};
+ // The existing chess setup protocol is reused for Supabase rooms.
+ window.kcReceiveSetupMessage=function(m){
+   if(!m||typeof m.type!=='string')return;
+   try{
+     if(m.type==='SETUP_PROPOSAL')receiveSetupProposal(m);
+     else if(m.type==='SETUP_ACCEPT'){if(role==='w')confirmStartAfterAcceptance();}
+     else if(m.type==='SETUP_FINAL'){
+       if(!isValidRemoteBoard(m.board)){say('Host sent an invalid setup. Ask the host to resend.');return}
+       p2pLastSent={board:setupBoardClone(m.board),turn:m.turn==='b'?'b':'w',minutes:Math.max(0,Number(m.minutes)||0)};
+       applyP2PStart(p2pLastSent);send({type:'SETUP_FINAL_ACK'});
+     }else if(m.type==='SETUP_FINAL_ACK'&&role==='w'){applyP2PStart(p2pLastSent);say('Setup accepted. Game started.')}
+     else if(m.type==='SETUP_CANCEL')receiveSetupCancel();
+     else if(m.type==='MOVE'&&m.move){const x=m.move;executeMove(x.fr,x.fc,x.tr,x.tc,true)}
+   }catch(e){console.error('Online setup protocol error',e);say('Setup message error: '+(e.message||'unknown error'))}
+ };
+ function connect(code,host){
+   if(!init())return;
+   if(channel){try{client.removeChannel(channel)}catch(e){}}
+   room=String(code).toUpperCase();role=host?'w':'b';opponentReady=false;setupFlowOpened=false;subscribed=false;
+   channel=client.channel('khmer-chess-'+room,{config:{broadcast:{self:false},presence:{key:account}}});
+   channel.on('presence',{event:'sync'},()=>{
+     if(!channel)return;
+     const state=channel.presenceState()||{};
+     const members=Object.values(state).flat();
+     const others=members.filter(m=>m&&m.account!==account);
+     if(others.length&&!opponentReady){
+       opponentReady=true;say('Opponent detected. Opening board setup…');enterSetupFlow();
+     }else if(!others.length&&opponentReady){
+       opponentReady=false;setupFlowOpened=false;say('Opponent left the room.');
+     }
+   });
+   channel.on('broadcast',{event:'game'},({payload})=>{
+     if(!payload||payload.from===account||(payload.room&&payload.room!==room))return;
+     if(payload.kind==='hello'&&role==='w'){
+       try{channel.send({type:'broadcast',event:'game',payload:{kind:'hello_ack',from:account,to:payload.from,room}})}catch(e){}
+     }else if(payload.kind==='hello_ack'&&payload.to===account){say('Opponent connected. Waiting for room presence confirmation…')}
+     else if(payload.kind==='protocol'&&payload.message){const m=payload.message;if(m.type==='MOVE'&&m.move){try{executeMove(m.move.fr,m.move.fc,m.move.tr,m.move.tc,true)}catch(e){say('Move sync error: '+e.message)}}else if(window.kcReceiveSetupMessage)window.kcReceiveSetupMessage(m)}
+     else if(payload.kind==='move'&&(!payload.to||payload.to===account)){const m=payload.move;try{if(m&&typeof executeMove==='function')executeMove(m.fr,m.fc,m.tr,m.tc,true)}catch(e){say('Move sync error: '+e.message)}}
+   });
+   channel.subscribe(async state=>{
+     if(state==='SUBSCRIBED'){
+       subscribed=true;
+       try{await channel.track({account,role,joinedAt:Date.now()})}catch(e){console.error('Presence track failed',e);say('Connected, but room presence failed. Check Supabase Realtime presence permissions.');return}
+       say('Connected to '+room+' as '+(role==='w'?'White / Host':'Black / Client')+'. Waiting for opponent…');
+       // A presence sync can occur before this client tracks; run one explicit membership check afterward.
+       setTimeout(()=>{if(channel&&subscribed){const members=Object.values(channel.presenceState()||{}).flat();if(members.some(m=>m&&m.account!==account)){opponentReady=true;enterSetupFlow()}}},250);
+     }else if(state==='CHANNEL_ERROR'||state==='TIMED_OUT'||state==='CLOSED'){
+       subscribed=false;say('Connection failed ('+state+'). Check Supabase Realtime configuration.');
+     }
+   });
+   $('kc-room').value=room;
+ }
+ $('kc-online-launch').onclick=()=>{panel.style.display='flex';init()};
+ $('kc-online-close').onclick=()=>panel.style.display='none';
+ $('kc-copy-account').onclick=async()=>{try{await navigator.clipboard.writeText(account);say('Account ID copied')}catch(e){say('Your account ID: '+account)}};
+ $('kc-new-room').onclick=()=>connect(Math.random().toString(36).slice(2,8).toUpperCase(),true);
+ $('kc-join-room').onclick=()=>{const c=$('kc-room').value.trim();if(c)connect(c,false);else say('Enter a room code first')};
+ $('kc-leave-room').onclick=()=>{if(channel&&client){try{client.removeChannel(channel)}catch(e){}}channel=null;room='';role=null;opponentReady=false;subscribed=false;setupFlowOpened=false;say('Disconnected')};
+ $('kc-challenge-account').onclick=()=>say('Direct account-ID challenge needs a secure account directory backend. For now, share a room code with your opponent.');
  window.addEventListener('load',()=>{try{if(typeof executeMove==='function'&&!executeMove.__kcOnlineWrapped){const original=executeMove;executeMove=function(fr,fc,tr,tc,fromRemote=false){const p=boardState?.[fr]?.[fc],color=p?.c,legal=!!p&&p.c===turn&&getLegalMoves(boardState,fr,fc).some(([r,c])=>r===tr&&c===tc);const result=original(fr,fc,tr,tc,fromRemote);if(!fromRemote&&legal&&channel&&role&&opponentReady&&color===role)send({type:'MOVE',move:{fr,fc,tr,tc}});return result};executeMove.__kcOnlineWrapped=true}}catch(e){say('Move adapter initialization failed: '+e.message)}});
+})();
+</script><script src="./online-config.js"></script>
+<script>
+(()=>{const $=id=>document.getElementById(id),panel=$('kc-online-panel'),status=$('kc-online-status');let account=localStorage.getItem('khmerChessAccountIdV1');if(!account){account='KC-'+Math.random().toString(36).slice(2,6).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase();localStorage.setItem('khmerChessAccountIdV1',account)}$('kc-account').value=account;let client=null,channel=null,room='',role=null;const say=t=>status.textContent=t;const cfg=window.KHMER_CHESS_SUPABASE||{};
+function init(){if(!window.supabase||!cfg.url||!cfg.anonKey||cfg.url.includes('YOUR_')){say('Setup required: edit www/online-config.js with your Supabase URL and public anon/publishable key.');return false}if(!client)client=window.supabase.createClient(cfg.url,cfg.anonKey);return true}
+function connect(code,host){if(!init())return;if(channel)client.removeChannel(channel);room=code.toUpperCase();role=host?'w':'b';channel=client.channel('khmer-chess-'+room,{config:{broadcast:{self:false},presence:{key:account}}});channel.on('broadcast',{event:'game'},({payload})=>{if(!payload||payload.from===account)return;if(payload.kind==='hello'&&role==='w')channel.send({type:'broadcast',event:'game',payload:{kind:'hello_ack',from:account,to:payload.from}});if(payload.kind==='move'&&(!payload.to||payload.to===account)){let m=payload.move;try{if(m&&typeof executeMove==='function')executeMove(m.fr,m.fc,m.tr,m.tc,true);say('Received opponent move. Room '+room)}catch(e){say('Move sync error: '+e.message)}}if(payload.kind==='hello_ack'&&payload.to===account)say('Opponent connected in room '+room+'. Verify game state before playing.');}).subscribe(s=>{if(s==='SUBSCRIBED'){say('Connected to '+room+' as '+(role==='w'?'White':'Black')+'. Share this room code.');channel.send({type:'broadcast',event:'game',payload:{kind:'hello',from:account,room}})}else if(s==='CHANNEL_ERROR'||s==='TIMED_OUT')say('Connection failed. Check Supabase Realtime configuration.')});$('kc-room').value=room}
+$('kc-online-launch').onclick=()=>{panel.style.display='flex';init()};$('kc-online-close').onclick=()=>panel.style.display='none';$('kc-copy-account').onclick=async()=>{try{await navigator.clipboard.writeText(account);say('Account ID copied')}catch(e){say('Your account ID: '+account)}};$('kc-new-room').onclick=()=>connect(Math.random().toString(36).slice(2,8).toUpperCase(),true);$('kc-join-room').onclick=()=>{let c=$('kc-room').value.trim();if(c)connect(c,false);else say('Enter a room code first')};$('kc-leave-room').onclick=()=>{if(channel&&client)client.removeChannel(channel);channel=null;room='';role=null;say('Disconnected')};$('kc-challenge-account').onclick=()=>say('Direct account-ID challenge needs a secure account directory backend. For now, share a room code with your opponent.');
+// Relay local moves only when the local player role matches. This adapter must be validated against the game's existing PeerJS mode and all rule/timer states.
+window.addEventListener('load',()=>{try{if(typeof executeMove==='function'&&!executeMove.__kcOnlineWrapped){const original=executeMove;executeMove=function(fr,fc,tr,tc,fromRemote=false){const p=boardState?.[fr]?.[fc],color=p?.c,legal=!!p&&p.c===turn&&getLegalMoves(boardState,fr,fc).some(([r,c])=>r===tr&&c===tc);const result=original(fr,fc,tr,tc,fromRemote);if(!fromRemote&&legal&&channel&&role&&color===role)channel.send({type:'broadcast',event:'game',payload:{kind:'move',from:account,to:null,room,move:{fr,fc,tr,tc}}});return result};executeMove.__kcOnlineWrapped=true}}catch(e){say('Move adapter initialization failed: '+e.message)}})
 })();
 </script>
 
