@@ -3400,13 +3400,20 @@ self.onmessage = function (e) {
                     if (myRole === 'w') p2pConn.send({ type: 'RESYNC', state: snapshot() });
                 } else {
                     appendChatMessage('System', `Connected as ${myRole === 'w' ? 'White / Host' : 'Black / Guest'}.`);
-                    if (myRole === 'b') appendChatMessage('System', 'Waiting for the host to send the game setup...');
+                    if (myRole === 'b') {
+                        appendChatMessage('System', 'Connected to host. Requesting the game setup…');
+                        // Explicit ready signal lets the host resend the proposal if its first
+                        // message was sent before the guest finished opening its data channel.
+                        try { p2pConn.send({ type: 'CLIENT_READY' }); } catch (e) {}
+                    }
                     if (myRole === 'w') {
                         p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) };
                         openNegotiationSetup(true);
-                        // Send an initial board/config snapshot automatically so the guest does not
-                        // remain stuck waiting. The host can still adjust the setup and resend it.
-                        sendSetupProposal();
+                        setOnlineStatus('Player connected — sending board setup…');
+                        // Wait a moment for both data channels to settle, then send and retry.
+                        // The CLIENT_READY signal below also triggers a resend if needed.
+                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted) sendSetupProposal(); }, 300);
+                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted && !p2pReceivedOffer) sendSetupProposal(); }, 1400);
                     }
                 }
             });
@@ -3415,6 +3422,14 @@ self.onmessage = function (e) {
                 if (!data || typeof data.type !== 'string') return;
                 if (data.type === 'PING') { try { p2pConn.send({ type: 'PONG' }); } catch (e) {} }
                 else if (data.type === 'PONG') { }
+                else if (data.type === 'CLIENT_READY') {
+                    if (myRole === 'w' && !p2pGameStarted) {
+                        if (!p2pSetup) p2pSetup = { board: setupBoardClone(boardState), turn: 'w', minutes: Number(document.getElementById('settings-match-time')?.value || 20) };
+                        // Use the most recently selected host setup when available.
+                        setOnlineStatus('Guest connected — sending game setup…');
+                        setTimeout(() => { if (myRole === 'w' && p2pConn && p2pConn.open && !p2pGameStarted) sendSetupProposal(); }, 100);
+                    }
+                }
                 else if (data.type === 'MOVE') executeMove(data.fr, data.fc, data.tr, data.tc, true);
                 else if (data.type === 'CHAT') appendChatMessage('Opponent', data.text);
                 else if (data.type === 'SETUP_PROPOSAL') receiveSetupProposal(data);
