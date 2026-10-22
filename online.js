@@ -124,8 +124,9 @@ async function olLoadProfile() {
   const { data } = await sb.from('profiles').select('*').eq('id', sbUser.id).maybeSingle();
   sbProfile = data || { display_name: (sbUser.email || 'Player').split('@')[0], wins: 0, losses: 0, draws: 0 };
 }
-function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); }
-function olCloseAuth() { olById('auth-modal').classList.remove('active'); }
+function olSyncMenuClass() { const on = olById('lobby-modal').classList.contains('active') || olById('auth-modal').classList.contains('active'); document.body.classList.toggle('ol-menu-open', on); }
+function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); olSyncMenuClass(); }
+function olCloseAuth() { olById('auth-modal').classList.remove('active'); olSyncMenuClass(); }
 function olAuthTab(t) {
   olById('auth-tab-in').classList.toggle('active', t === 'in'); olById('auth-tab-up').classList.toggle('active', t === 'up');
   olById('auth-name-wrap').style.display = t === 'up' ? 'flex' : 'none';
@@ -191,12 +192,12 @@ function openLobby() {
   if (!olInit()) { olSetStatus('Not configured — edit config.js', false); return; }
   if (!sbUser) { olOpenAuth(); return; }
   olRenderLobbyHeader();
-  olById('lobby-modal').classList.add('active');
+  olById('lobby-modal').classList.add('active'); olSyncMenuClass();
   olRefreshLobby();
   clearInterval(onlineLobbyTimer);
   onlineLobbyTimer = setInterval(() => { if (!document.hidden) olRefreshLobby(); }, 5000);
 }
-function closeLobby() { olById('lobby-modal').classList.remove('active'); clearInterval(onlineLobbyTimer); onlineLobbyTimer = null; }
+function closeLobby() { olById('lobby-modal').classList.remove('active'); olSyncMenuClass(); clearInterval(onlineLobbyTimer); onlineLobbyTimer = null; }
 async function olRefreshLobby() { olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadMyRooms(); olLoadOpenRooms(); }
 function olRenderLobbyHeader() {
   if (!sbProfile) return;
