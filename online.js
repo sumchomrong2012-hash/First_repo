@@ -336,7 +336,7 @@ function olUnsubscribe() {
   onlineChannel = null; clearInterval(onlinePollTimer); onlinePollTimer = null; clearTimeout(onlinePumpTimer);
   onlineConnected = false;
 }
-function olLeaveRoomView() { olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
+function olLeaveRoomView() { olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
 function onlineLeave() {                               // called by the game whenever the mode is switched / reset
   olLeaveRoomView(); closeLobby(); olCloseAuth(); onlineReplaying = false;
 }
@@ -409,29 +409,8 @@ function olOnMessage(m, fromHistory) {
   if (mine && !fromHistory) return;                              // already shown when we sent it
   const name = mine ? 'You' : (onlineRoom ? (m.user_id === onlineRoom.host_id ? onlineRoom.host_name : onlineRoom.guest_name) : 'Opponent');
   appendChatMessage(name || 'Opponent', m.body);
-  if (!mine && !fromHistory) olNotifyChat(name || 'Opponent', m.body);
+  if (!mine && !fromHistory) { const d = olById('chat-toggle-btn'); if (d) { d.style.outline = '2px solid #f472b6'; setTimeout(() => { d.style.outline = ''; }, 2500); } }
 }
-/* chat notification: red badge on the chat icon + a toast + beep/vibration (skipped while the chat is open) */
-let olUnread = 0, olToastTimer = null;
-function olNotifyChat(name, body) {
-  const dd = olById('chat-dropdown');
-  if (dd && dd.classList.contains('active')) return;
-  olUnread++;
-  const b = olById('chat-badge'); if (b) { b.textContent = olUnread > 9 ? '9+' : String(olUnread); b.classList.remove('show'); void b.offsetWidth; b.classList.add('show'); }
-  const t = olById('chat-toast');
-  if (t) { t.textContent = ''; const nm = olEl('b', null, name + ': '); t.appendChild(nm); t.appendChild(document.createTextNode(body)); t.classList.add('show');
-    clearTimeout(olToastTimer); olToastTimer = setTimeout(() => t.classList.remove('show'), 4000); }
-  try { if (navigator.vibrate) navigator.vibrate(60); } catch (e) {}
-  try {
-    const ctx = (typeof audioCtx !== 'undefined' && audioCtx) ? audioCtx : null;
-    if (ctx && ctx.state === 'running' && (typeof soundOn === 'undefined' || soundOn)) {
-      const o = ctx.createOscillator(), g = ctx.createGain(); o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.08;
-      o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.12);
-    }
-  } catch (e) {}
-}
-function olClearChatBadge() { olUnread = 0; const b = olById('chat-badge'); if (b) b.classList.remove('show'); const t = olById('chat-toast'); if (t) t.classList.remove('show'); }
-function olOpenChatFromToast() { const dd = olById('chat-dropdown'); if (dd) dd.classList.add('active'); olClearChatBadge(); }
 
 /* ------------------------------------------------------------------ room state, clocks, results */
 function olApplyRoom(room, silent) {

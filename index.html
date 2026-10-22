@@ -453,66 +453,6 @@
         .ol-link{background:none;border:none;color:#47c8c1;font-size:12px;cursor:pointer;text-decoration:underline;padding:4px 0;}
         .ol-roominfo{font-size:clamp(10px,1.3vh,13px);color:#a7f3d0;font-weight:700;word-break:break-all;}
         #draw-offer-bar{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 8px);z-index:70;display:none;align-items:center;gap:8px;background:#111827;border:2px solid #f5b21b;border-radius:12px;padding:8px 12px;box-shadow:0 8px 30px rgba(0,0,0,.6);font-size:13px;font-weight:800;color:#fde68a;max-width:94vw;}
-
-        /* ---------- phone-fit: bigger board, header never clipped ---------- */
-        html,body{height:100%;height:100dvh;}
-        body{padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);}
-        .board-wrapper{flex:0 0 auto;max-height:none;min-height:0;}
-        @media (max-width: 900px){
-            .center-column{overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
-            .main-container{width:calc(100% - 12px);gap:6px;grid-template-rows:minmax(0,1fr);}
-            .center-column{height:100%;}
-            .turn-bar{margin:0 6px 6px;}
-            /* the carved frame wastes ~26% of the width: zoom the picture so the 8x8 squares fill ~90% */
-            #chess-board.skin-khmer{background-size:122.3% 122.3%;background-position:48.7% 50.9%;padding:5%;border-radius:8px;}
-        }
-        @media (max-width: 700px){
-            :root{--btn-h:40px;}
-            header{height:auto;min-height:0;flex-wrap:wrap;align-items:center;padding:6px 8px;gap:6px 8px;}
-            .title-area{order:1;flex:1 1 0;min-width:0;overflow:hidden;}
-            .title-area h1{font-size:16px;}
-            .title-area h1 span{display:none;}
-            .header-controls{display:contents;}
-            .mode-switcher{order:2;}
-            .mode-btn{padding:0 9px;min-height:34px;font-size:12px;}
-            header::after{content:'';order:3;flex:0 0 100%;height:0;}
-            .header-controls > div:not(.mode-switcher){order:4;flex:1 1 0;min-width:0;display:flex;}
-            .header-controls > div:not(.mode-switcher) > .btn,.header-controls > .btn{flex:1 1 0;min-width:0;width:auto;padding:0;order:4;}
-            .turn-bar{height:38px;min-height:38px;font-size:12px;}
-            /* menus: full-width sheet under the header, always on screen */
-            .dropdown-menu{position:fixed;left:8px;right:8px;top:calc(var(--hdr-bottom,96px) + 4px);width:auto;max-height:calc(100dvh - var(--hdr-bottom,96px) - 16px);z-index:700;}
-            .modal-content{max-height:calc(100dvh - 24px);}
-        }
-
-        /* ---------- round 3: modals above header, chat notification, no move counter ---------- */
-        .modal{z-index:1000 !important;}
-        #auth-modal{z-index:1010 !important;}
-        #draw-offer-bar{z-index:1100 !important;}
-        #move-status{display:none !important;}
-        .chat-badge{position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;font-size:11px;font-weight:900;line-height:18px;text-align:center;display:none;box-shadow:0 0 0 2px #111827;}
-        .chat-badge.show{display:block;animation:chatPop .35s ease;}
-        @keyframes chatPop{0%{transform:scale(.4)}70%{transform:scale(1.25)}100%{transform:scale(1)}}
-        #chat-toast{position:fixed;left:10px;right:10px;top:calc(var(--hdr-bottom,96px) + 6px);z-index:900;display:none;background:#111827;border:2px solid #f472b6;border-radius:12px;padding:10px 12px;color:#f4f7fb;font-size:14px;box-shadow:0 10px 30px rgba(0,0,0,.6);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-        #chat-toast.show{display:block;animation:toastIn .25s ease;}
-        #chat-toast b{color:#f472b6;}
-        @keyframes toastIn{from{transform:translateY(-12px);opacity:0}to{transform:none;opacity:1}}
-        @media (max-width: 900px){
-            .main-container{width:100%;}
-            .turn-bar{margin:0 6px 4px;}
-            #chess-board.skin-khmer{background-size:130.45% 130.45%;background-position:49% 50.7%;padding:2%;border-radius:0;}
-            .board-wrapper{border-radius:0;}
-            .move-status,.ai-mode-panel,.online-mode-panel,.timer-container,.training-wrap,.training-start-bar,.training-hint{width:calc(100% - 12px);}
-        }
-        @media (max-width: 700px){
-            :root{--btn-h:38px;}
-            header{padding:4px 8px;gap:4px 8px;}
-            .mode-btn{min-height:30px;}
-            .turn-bar{height:34px;min-height:34px;}
-            .move-status{min-height:22px;padding:2px 6px;}
-            .ai-mode-title,.online-mode-title{display:none;}
-            .ai-mode-panel,.online-mode-panel{padding:6px 8px;gap:6px;}
-            .center-column{gap:5px;}
-        }
     </style>
 </head>
 <body>
@@ -535,7 +475,10 @@
                 </button>
             </div>
 
-            <div style="position:relative;display:none;">
+            <div style="position:relative;">
+                <button class="btn" onclick="toggleGameInfoDropdown(event)" title="Game Info">
+                    <i data-lucide="bar-chart-3"></i><span class="label-btn">ព័ត៌មាន</span>
+                </button>
                 <div id="game-info-dropdown" class="dropdown-menu">
                     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #263348;padding-bottom:6px;position:sticky;top:-14px;background:#111827;z-index:2;padding-top:14px;margin-top:-14px;">
                         <h3 style="font-size:13px;color:#f4f7fb;">📊 Game Info</h3>
@@ -570,8 +513,8 @@
             </div>
 
             <div style="position:relative;">
-                <button class="btn" onclick="toggleChatDropdown(event)" title="Chat" id="chat-toggle-btn" style="position:relative;">
-                    <i data-lucide="message-circle"></i><span class="label-btn">ជជែក</span><span id="chat-badge" class="chat-badge"></span>
+                <button class="btn" onclick="toggleChatDropdown(event)" title="Chat" id="chat-toggle-btn">
+                    <i data-lucide="message-circle"></i><span class="label-btn">ជជែក</span>
                 </button>
                 <div id="chat-dropdown" class="dropdown-menu" style="padding:0;overflow:hidden;">
                     <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #263348;padding:12px 14px 8px;background:#111827;">
@@ -898,8 +841,6 @@
     </div>
 
     
-    <div id="chat-toast" onclick="olOpenChatFromToast()"></div>
-
     <div id="draw-offer-bar"><span>🤝 Opponent offers a draw</span>
         <button class="btn btn-warning" type="button" onclick="olRespondDraw(true)">Accept</button>
         <button class="btn" type="button" onclick="olRespondDraw(false)">Decline</button>
@@ -1393,7 +1334,7 @@ const KhmerEngine = (function () {
            _internal: { gen, make, unmake, attacked, board, evaluate, MAXM, moveBuf, getStm: () => stm, getKing: () => kingSq } };
 })();
 </script>
-<script src="online.js?v=2"></script>
+<script src="online.js?v=1"></script>
 <script>
         /* CONSTANTS */
         // iOS Safari doesn't implement HTML5 drag-and-drop over touch, but
@@ -1707,7 +1648,7 @@ const pieceImagesCustom = {
         function toggleChatDropdown(e) {
             e.stopPropagation();
             const target = document.getElementById('chat-dropdown');
-            if (target && !target.classList.contains('active')) { target.classList.add('active'); if (window.olClearChatBadge) olClearChatBadge(); }
+            if (target && !target.classList.contains('active')) target.classList.add('active');
             else target?.classList.remove('active');
         }
         function closeChatDropdown() { document.getElementById('chat-dropdown')?.classList.remove('active'); }
@@ -3431,38 +3372,5 @@ self.onmessage = function (e) {
         setTimeout(() => { if (window.lucide) lucide.createIcons(); }, 100);
     </script>
 <script>window.addEventListener('DOMContentLoaded',()=>{ if(window.lucide) lucide.createIcons(); });</script>
-
-<script id="phone-fit">
-/* phone-fit: size the board to the free space so it is as big as possible and nothing is cut off */
-(function(){
-  var raf=0;
-  function fit(){
-    raf=0;
-    var wrap=document.getElementById('board-wrapper'); if(!wrap) return; var col=wrap.parentElement; if(!col) return;
-    var hdr=document.querySelector('header');
-    if(hdr) document.documentElement.style.setProperty('--hdr-bottom', Math.round(hdr.getBoundingClientRect().bottom)+'px');
-    var cs=getComputedStyle(col), gap=parseFloat(cs.rowGap)||0, others=0, n=0;
-    for(var i=0;i<col.children.length;i++){
-      var ch=col.children[i]; if(ch===wrap) continue;
-      var st=getComputedStyle(ch); if(st.display==='none'||st.position==='fixed'||st.position==='absolute') continue;
-      others+=ch.getBoundingClientRect().height; n++;
-    }
-    var avail=col.clientHeight-others-gap*n-2;
-    var size=Math.floor(Math.max(250,Math.min(col.clientWidth,avail)));
-    if(wrap.style.width!==size+'px') wrap.style.width=size+'px';
-  }
-  function schedule(){ if(!raf) raf=requestAnimationFrame(fit); }
-  window.addEventListener('resize',schedule); window.addEventListener('orientationchange',function(){setTimeout(schedule,250);});
-  if(window.visualViewport) window.visualViewport.addEventListener('resize',schedule);
-  window.addEventListener('load',function(){
-    schedule(); setTimeout(schedule,400); setTimeout(schedule,1200);
-    if(window.ResizeObserver){
-      var ro=new ResizeObserver(schedule), col=document.querySelector('.center-column');
-      if(col){ ro.observe(col); for(var i=0;i<col.children.length;i++) ro.observe(col.children[i]); }
-      var h=document.querySelector('header'); if(h) ro.observe(h);
-    }
-  });
-})();
-</script>
 </body>
 </html>
