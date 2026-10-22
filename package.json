@@ -1,7 +1,0 @@
-{
-  "name": "khmer-chess-online",
-  "version": "2.1.0",
-  "private": true,
-  "description": "OUK KHMER Chess static GitHub Pages app with improved PeerJS room connection",
-  "scripts": {"start": "npx serve www"}
-}
