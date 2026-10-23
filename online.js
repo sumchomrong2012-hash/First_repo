@@ -23,7 +23,7 @@ const OL_ERR = {
   bad_ply: 'Game was out of sync — reloading.', game_not_active: 'This game is not active.',
   not_in_room: 'You are not a player in this room.', name_taken: 'That display name is taken.',
   bad_name: 'Display name must be 2–24 characters.', not_expired: 'Time has not expired yet.',
-  no_offer: 'There is no draw offer to answer.', no_profile: 'Profile missing — sign out and in again.'
+  no_offer: 'There is no draw offer to answer.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
 };
 function olErr(e) { const m = (e && e.message) || String(e); for (const k in OL_ERR) if (m.includes(k)) return OL_ERR[k]; return m; }
 function olEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -123,6 +123,7 @@ async function onlineEnterMode() {
 async function olLoadProfile() {
   const { data } = await sb.from('profiles').select('*').eq('id', sbUser.id).maybeSingle();
   sbProfile = data || { display_name: (sbUser.email || 'Player').split('@')[0], wins: 0, losses: 0, draws: 0 };
+  olAvatarCache[sbUser.id] = sbProfile.avatar || null;
 }
 function olSyncMenuClass() { const on = olById('lobby-modal').classList.contains('active') || olById('auth-modal').classList.contains('active'); document.body.classList.toggle('ol-menu-open', on); }
 function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); olSyncMenuClass(); }
@@ -179,13 +180,7 @@ async function olSignOut() {
   await sb.auth.signOut(); sbUser = null; sbProfile = null;
   olUpdatePanel(); olOpenAuth();
 }
-async function olRename() {
-  const n = prompt('New display name (2–24 characters):', sbProfile ? sbProfile.display_name : '');
-  if (!n) return;
-  const { data, error } = await sb.rpc('set_display_name', { p_name: n });
-  if (error) { alert(olErr(error)); return; }
-  sbProfile = data; olRenderLobbyHeader(); olUpdatePanel();
-}
+function olRename() { olOpenProfile(); }
 
 /* ------------------------------------------------------------------ lobby */
 function openLobby() {
@@ -201,7 +196,8 @@ function closeLobby() { olById('lobby-modal').classList.remove('active'); olSync
 async function olRefreshLobby() { olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadMyRooms(); olLoadOpenRooms(); }
 function olRenderLobbyHeader() {
   if (!sbProfile) return;
-  olById('ol-who').textContent = '👤 ' + sbProfile.display_name;
+  olById('ol-who').textContent = sbProfile.display_name;
+  olRenderAvatar(olById('ol-me-av'), sbProfile.avatar, sbProfile.display_name);
   olById('ol-stats').textContent = `🏆 ${sbProfile.wins} wins • ${sbProfile.losses} losses • ${sbProfile.draws} draws`;
 }
 function olFillCreateForm() {
@@ -444,7 +440,7 @@ function olApplyRoom(room, silent) {
     appendChatMessage('System', `${olOpponentName()} joined. ${olColorName(room.turn)} moves first. Good luck!`);
     try { playSound('move'); } catch (e) {}
   }
-  olUpdatePanel(); olSetNames(room); olUpdateDrawBar(); olSyncClocks(); updateUI();
+  olUpdatePanel(); olSetNames(room); olLoadAvatars(room); olUpdateDrawBar(); olSyncClocks(); updateUI();
   if (room.status === 'finished' || room.status === 'cancelled') olFinalizeWhenIdle();
   if (room.status === 'playing') {
     if (onlineApplied < room.ply && !onlineIncoming.has(onlineApplied)) olCatchUp();
@@ -485,12 +481,87 @@ function olFinalizeWhenIdle() {
   olLoadProfile().catch(() => {});
 }
 function olSetNames(room) {
-  const w = document.querySelector('#timer-box-w .side-header span:last-child'), b = document.querySelector('#timer-box-b .side-header span:last-child');
-  if (!w || !b) return;
-  if (!room || !room.guest_id) { w.textContent = 'WHITE • ស'; b.textContent = 'BLACK • ខ្មៅ'; return; }
-  const nm = c => (room.host_color === c ? room.host_name : room.guest_name) || '?';
-  w.textContent = 'WHITE • ' + nm('w'); b.textContent = 'BLACK • ' + nm('b');
+  const defaults = { w: 'WHITE • ស', b: 'BLACK • ខ្មៅ' };
+  for (const c of ['w', 'b']) {
+    const span = document.querySelector('#timer-box-' + c + ' .side-header span:last-child'); if (!span) continue;
+    let uid = null, name = null;
+    if (room) { if (room.host_color === c) { uid = room.host_id; name = room.host_name; } else { uid = room.guest_id; name = room.guest_name; } }
+    span.textContent = '';
+    if (!uid || !name) { span.className = ''; span.textContent = defaults[c]; continue; }
+    span.className = 'ol-who';
+    const av = olEl('span', 'ol-av'); olRenderAvatar(av, olAvatarCache[uid], name);
+    span.appendChild(av); span.appendChild(olEl('span', 'ol-nm', name));
+  }
 }
+/* ------------------------------------------------------------------ profile picture + name */
+let olAvatarCache = {};                 // user id -> picture (data URL) or null
+let pfPending;                          // undefined = picture unchanged, null = remove, string = new picture
+function olAvatarOk(u) { return typeof u === 'string' && u.length < 70000 && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+\/=]+$/.test(u); }
+function olRenderAvatar(el, avatar, name) {
+  el.textContent = '';
+  if (olAvatarOk(avatar)) { const i = document.createElement('img'); i.alt = ''; i.src = avatar; el.appendChild(i); }
+  else el.textContent = (name || '?').trim().charAt(0).toUpperCase() || '?';
+}
+async function olLoadAvatars(room) {
+  if (!room || !sb) return;
+  const ids = [room.host_id, room.guest_id].filter(id => id && !(id in olAvatarCache));
+  if (!ids.length) return;
+  ids.forEach(id => { olAvatarCache[id] = null; });          // mark first so a failure is not retried every poll
+  try {
+    const { data, error } = await sb.from('profiles').select('id,avatar').in('id', ids);
+    if (error) throw error;
+    (data || []).forEach(r => { olAvatarCache[r.id] = r.avatar || null; });
+    if (onlineRoom) olSetNames(onlineRoom);
+  } catch (e) {}
+}
+function olResizeImage(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const S = 128, c = document.createElement('canvas'); c.width = c.height = S;
+      const x = c.getContext('2d'), m = Math.min(img.naturalWidth, img.naturalHeight);
+      x.fillStyle = '#fff'; x.fillRect(0, 0, S, S);
+      x.drawImage(img, (img.naturalWidth - m) / 2, (img.naturalHeight - m) / 2, m, m, 0, 0, S, S);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Cannot read this picture. Try a JPG or PNG.')); };
+    img.src = url;
+  });
+}
+function olOpenProfile() {
+  if (!sbProfile) return;
+  pfPending = undefined; olById('pf-msg').textContent = ''; olById('pf-name').value = sbProfile.display_name;
+  olRenderAvatar(olById('pf-avatar'), sbProfile.avatar, sbProfile.display_name);
+  olById('profile-modal').classList.add('active');
+}
+function olCloseProfile() { olById('profile-modal').classList.remove('active'); }
+function olPfMsg(text, good) { const m = olById('pf-msg'); m.textContent = text; m.style.color = good ? '#6ee7b7' : '#fca5a5'; }
+function olPfRemove() { pfPending = null; olRenderAvatar(olById('pf-avatar'), null, olById('pf-name').value || sbProfile.display_name); }
+async function olPfChosen(file) {
+  if (!file) return;
+  try { pfPending = await olResizeImage(file); olRenderAvatar(olById('pf-avatar'), pfPending, olById('pf-name').value); olPfMsg(''); }
+  catch (e) { olPfMsg(e.message); }
+}
+async function olPfSave() {
+  const name = olById('pf-name').value.trim(), btn = olById('pf-save'); btn.disabled = true; olPfMsg('Saving…', true);
+  try {
+    if (name !== sbProfile.display_name) {
+      const { data, error } = await sb.rpc('set_display_name', { p_name: name }); if (error) throw error;
+      sbProfile.display_name = data.display_name;
+    }
+    if (pfPending !== undefined) {
+      const { data, error } = await sb.rpc('set_avatar', { p_avatar: pfPending });
+      if (error) { if (/set_avatar|schema cache|PGRST202|bad_avatar/i.test(error.message)) throw new Error('Picture could not be saved. Run update_avatar.sql in Supabase first.'); throw error; }
+      sbProfile.avatar = data.avatar || null;
+    }
+    olAvatarCache[sbUser.id] = sbProfile.avatar || null;
+    olRenderLobbyHeader(); olUpdatePanel();
+    if (onlineRoom) { olRefreshRoom().then(() => olSetNames(onlineRoom)); olSetNames(onlineRoom); }
+    olCloseProfile();
+  } catch (e) { olPfMsg(olErr(e)); }
+  btn.disabled = false;
+}
+window.addEventListener('DOMContentLoaded', () => { const f = olById('pf-file'); if (f) f.addEventListener('change', () => { olPfChosen(f.files[0]); f.value = ''; }); });
 
 /* ------------------------------------------------------------------ panel + buttons in the game screen */
 function olSetStatus(text, dot) { const t = olById('online-status-text'); if (t) t.textContent = text; const d = olById('online-dot'); if (d) d.classList.toggle('connected', !!dot); }
