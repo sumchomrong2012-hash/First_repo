@@ -452,14 +452,15 @@ function olOpenChatFromToast() { const dd = olById('chat-dropdown'); if (dd) dd.
 /* ------------------------------------------------------------------ room state, clocks, results */
 function olApplyRoom(room, silent) {
   if (!room || !onlineRoom || room.id !== onlineRoom.id) return;
-  const prev = onlineRoom.status, prevPending = !!onlineRoom.setup_pending;
+  const prev = onlineRoom.status, prevPending = !!onlineRoom.setup_pending, prevOffer = onlineRoom.draw_offer, prevPly = onlineRoom.ply;
   onlineRoom = room;
   if (room.server_now) onlineServerOffset = Date.parse(room.server_now) - Date.now();
   if (prev === 'waiting' && room.status === 'playing' && !silent) {
     appendChatMessage('System', `${olOpponentName()} joined. ${olColorName(room.turn)} moves first. Good luck!`);
     try { playSound('move'); } catch (e) {}
   }
-  olUpdatePanel(); olSetNames(room); olLoadAvatars(room); olUpdateDrawBar(); olSyncClocks(); updateUI();
+  olUpdatePanel(); olSetNames(room); olLoadAvatars(room); olUpdateDrawBar(prevOffer); olSyncClocks(); updateUI();
+  if (prevOffer === myRole && !room.draw_offer && room.status === 'playing' && room.ply === prevPly && !silent) olToast(`🤝 ${olOpponentName()} declined your draw offer.`);
   if (prevPending && !room.setup_pending && room.status === 'playing' && !silent) olOnSetupDone();
   olSetupCheck();
   if (room.status === 'finished' || room.status === 'cancelled') olFinalizeWhenIdle();
@@ -624,12 +625,26 @@ async function olRespondDraw(accept) {
   if (!onlineRoom) return;
   try { const { data, error } = await sb.rpc('respond_draw', { p_room: onlineRoom.id, p_accept: accept }); if (error) throw error; olApplyRoom(data); } catch (e) { alert(olErr(e)); }
 }
-function olUpdateDrawBar() {
-  const r = onlineRoom, bar = olById('draw-offer-bar'); if (!bar) return;
-  const on = r && r.status === 'playing' && r.draw_offer && r.draw_offer !== myRole;
-  bar.style.display = on ? 'flex' : 'none';
+function olUpdateDrawBar(prevOffer) {
+  const r = onlineRoom, bar = olById('draw-offer-bar'), sent = olById('draw-sent-bar'); if (!bar) return;
+  const playing = r && r.status === 'playing' && !r.setup_pending;
+  const incoming = !!(playing && r.draw_offer && r.draw_offer !== myRole);
+  const mine = !!(playing && r.draw_offer && r.draw_offer === myRole);
+  bar.style.display = incoming ? 'flex' : 'none';
+  if (sent) { sent.style.display = mine ? 'flex' : 'none'; if (mine) olById('draw-sent-text').textContent = `🤝 Draw offer sent — waiting for ${olOpponentName()}…`; }
+  if (incoming && prevOffer !== r.draw_offer) {            // a new offer just arrived
+    appendChatMessage('System', `${olOpponentName()} offers a draw.`);
+    try { if (navigator.vibrate) navigator.vibrate([80, 40, 80]); playSound('check'); } catch (e) {}
+  }
 }
-function olHideDrawBar() { const b = olById('draw-offer-bar'); if (b) b.style.display = 'none'; }
+let olToastTimer2 = null;
+function olToast(text) {
+  const t = olById('ol-toast'); if (!t) return;
+  t.textContent = text; t.classList.add('show');
+  clearTimeout(olToastTimer2); olToastTimer2 = setTimeout(() => t.classList.remove('show'), 4000);
+  appendChatMessage('System', text.replace(/^\S+\s/, ''));
+}
+function olHideDrawBar() { const b = olById('draw-offer-bar'); if (b) b.style.display = 'none'; const s = olById('draw-sent-bar'); if (s) s.style.display = 'none'; }
 function olInviteLink() { return (olSiteUrl() || (location.origin + location.pathname)) + '?join=' + onlineRoom.code; }
 async function olInvite() {
   if (!onlineRoom) return;
