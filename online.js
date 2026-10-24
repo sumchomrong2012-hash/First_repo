@@ -14,6 +14,9 @@ let onlineChannel = null, onlinePollTimer = null, onlineLobbyTimer = null;
 let onlineLoadToken = 0, onlineMoveTimes = [], onlineServerOffset = 0;
 let onlineIncoming = new Map(), onlinePumpTimer = null, onlineCatching = false;
 let onlineLastMsgId = 0, onlineConnected = false, onlinePendingJoin = null, onlineLoading = false;
+window.onlineSetupActive = false;
+window.onlineSetupColor = null;
+let olChoicePromptedRoom = null, olSetupRoomSeen = null;
 
 const OL_TIMES = [[0, 'No clock'], [1, '1 min'], [3, '3 min'], [5, '5 min'], [10, '10 min'], [20, '20 min'], [60, '60 min']];
 const OL_ERR = {
@@ -280,6 +283,9 @@ function olResetBoardForRoom() {
   stopTimer(); hideKingEmergency(); hideCountingBadge();
   countingActive = false; countingUsedOnce = false; countingRegime = null;
   setupStandardPosition();
+  if (onlineRoom.board_position && Array.isArray(onlineRoom.board_position) && onlineRoom.board_position.length === 64) {
+    boardState = Array.from({length:8}, (_, r) => Array.from({length:8}, (_, c) => onlineRoom.board_position[r*8+c] || null));
+  }
   capturedPieces = { w: [], b: [] }; turn = onlineRoom.first_turn || 'w'; moveNumber = 1;
   selectedSquare = null; legalMovesCache = []; lastMove = null; historyStack = []; redoStack = [];
   gameOver = false; isAnimating = false; aiSide = 'off';
@@ -305,6 +311,7 @@ async function olEnterRoom(room) {
   try { await olLoadAll(token); } finally { if (token === onlineLoadToken) onlineLoading = false; }
   if (token !== onlineLoadToken) return;
   olStartPolling(); olCatchUp();
+  olHandleSetupState(onlineRoom);
 }
 function olOnlyIfOnlineMode() {                       // make sure the UI is in Online mode (e.g. when opened from an invite link)
   if (currentMode !== 'online') { currentMode = 'online'; updateModeUI('online'); olById('chat-input').disabled = false; olById('chat-send-btn').disabled = false; }
@@ -458,6 +465,7 @@ function olApplyRoom(room, silent) {
     try { playSound('move'); } catch (e) {}
   }
   olUpdatePanel(); olSetNames(room); olLoadAvatars(room); olUpdateDrawBar(); olSyncClocks(); updateUI();
+  olHandleSetupState(room);
   if (room.status === 'finished' || room.status === 'cancelled') olFinalizeWhenIdle();
   if (room.status === 'playing') {
     if (onlineApplied < room.ply && !onlineIncoming.has(onlineApplied)) olCatchUp();
@@ -580,6 +588,120 @@ async function olPfSave() {
 }
 window.addEventListener('DOMContentLoaded', () => { const f = olById('pf-file'); if (f) f.addEventListener('change', () => { olPfChosen(f.files[0]); f.value = ''; }); });
 
+
+/* ------------------------------------------------------------------ online piece handicap setup */
+function olHandleSetupState(room) {
+  if (!room || !sbUser) return;
+  const choice = olById('online-piece-choice-modal'), setup = olById('online-piece-setup-modal');
+  if (room.status === 'setup_choice') {
+    window.onlineSetupActive = false; document.body.classList.remove('online-setup-active');
+    if (setup) setup.classList.remove('active');
+    if (olChoicePromptedRoom !== room.id) {
+      olChoicePromptedRoom = room.id;
+      if (choice) choice.classList.add('active');
+      const st = olById('online-piece-choice-status');
+      if (st) st.textContent = 'Both players choose. If either player selects Yes, both players can adjust their own pieces.';
+    }
+    return;
+  }
+  if (choice) choice.classList.remove('active');
+  if (room.status === 'setup') {
+    if (olSetupRoomSeen !== room.id) {
+      olSetupRoomSeen = room.id;
+      olStartPieceSetup(room);
+    } else if (window.onlineSetupActive) {
+      const st = olById('online-piece-setup-status');
+      if (st) st.textContent = room.setup_ready_host && room.setup_ready_guest
+        ? 'Both players ready. Starting…'
+        : (room.setup_ready_host || room.setup_ready_guest ? 'Your opponent is ready. Finish your setup and press OK — Ready.' : 'Adjust only your own pieces. Press OK — Ready when finished.');
+    }
+    if (setup) {
+      const mineReady = !!room[`setup_ready_${room.host_id === sbUser.id ? 'host' : 'guest'}`];
+      setup.classList.add('active');
+      const readyBtn = olById('online-piece-setup-ready');
+      const resetBtn = olById('online-piece-setup-reset');
+      if (readyBtn) { readyBtn.disabled = mineReady; readyBtn.textContent = mineReady ? '✓ Ready — Waiting' : 'OK — Ready'; }
+      if (resetBtn) resetBtn.disabled = mineReady;
+    }
+    return;
+  }
+  if (setup) setup.classList.remove('active');
+  if (room.status === 'playing') {
+    window.onlineSetupActive = false; document.body.classList.remove('online-setup-active');
+    document.getElementById('training-wrap-white')?.classList.remove('online-own-tray');
+    document.getElementById('training-wrap-black')?.classList.remove('online-own-tray');
+    if (room.board_position && Array.isArray(room.board_position) && onlineApplied === 0) {
+      boardState = Array.from({length:8}, (_, r) => Array.from({length:8}, (_, c) => room.board_position[r*8+c] || null));
+      renderBoard(); updateUI();
+    }
+  }
+}
+function olStartPieceSetup(room) {
+  window.onlineSetupActive = true; window.onlineSetupColor = myRole;
+  document.body.classList.add('online-setup-active');
+  setupStandardPosition();
+  trainingSyncTraysFromBoard();
+  trainingDragPiece = null; trainingDragSource = null;
+  const ownWrap = document.getElementById(myRole === 'w' ? 'training-wrap-white' : 'training-wrap-black');
+  const otherWrap = document.getElementById(myRole === 'w' ? 'training-wrap-black' : 'training-wrap-white');
+  ownWrap?.classList.add('active','online-own-tray');
+  otherWrap?.classList.remove('online-own-tray');
+  // Keep the game in online mode; renderBoard switches to the existing setup interaction handlers.
+  renderTrays(); renderBoard(); updateUI();
+  const setup = olById('online-piece-setup-modal'); if (setup) setup.classList.add('active');
+  const st = olById('online-piece-setup-status');
+  if (st) st.textContent = `You control ${olColorName(myRole)} only. Remove your pieces or add pieces/promoted pawns from your tray.`;
+}
+async function olSubmitSetupChoice(yes) {
+  if (!onlineRoom) return;
+  const b1 = olById('online-piece-choice-yes'), b2 = olById('online-piece-choice-no');
+  if (b1) b1.disabled = true; if (b2) b2.disabled = true;
+  try {
+    const {data,error} = await sb.rpc('choose_piece_setup',{p_room:onlineRoom.id,p_wants_setup:!!yes});
+    if (error) throw error;
+    olById('online-piece-choice-modal')?.classList.remove('active');
+    appendChatMessage('System', yes ? 'You requested custom piece setup. Waiting for your opponent’s choice…' : 'You chose the standard game. Waiting for your opponent’s choice…');
+    olApplyRoom(data);
+  } catch(e) { alert(olErr(e)); }
+  finally { if (b1) b1.disabled = false; if (b2) b2.disabled = false; }
+}
+function olResetOwnSetup() {
+  if (!onlineRoom || !window.onlineSetupActive) return;
+  setupStandardPosition();
+  // Preserve the opponent's current side as standard and rebuild only our tray accounting.
+  trainingSyncTraysFromBoard(); trainingDragPiece = null; trainingDragSource = null;
+  renderTrays(); renderBoard(); updateUI();
+}
+async function olSubmitSetupReady() {
+  if (!onlineRoom || !window.onlineSetupActive) return;
+  const own = myRole;
+  const kingCount = boardState.flat().filter(p => p && p.c === own && p.t === 'k').length;
+  if (kingCount !== 1) { alert('Your side must have exactly one King before you can confirm setup.'); return; }
+  const side = Array(64).fill(null);
+  for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
+    const p = boardState[r][c];
+    if (p && p.c === own) side[r*8+c] = {t:p.t,c:p.c,m:!!p.m};
+  }
+  const ready = olById('online-piece-setup-ready'); if (ready) ready.disabled = true;
+  try {
+    const {data,error} = await sb.rpc('submit_piece_setup',{p_room:onlineRoom.id,p_color:own,p_pieces:side});
+    if (error) throw error;
+    olApplyRoom(data);
+    const st=olById('online-piece-setup-status');
+    if (st) st.textContent = 'Your pieces are saved. Waiting for your opponent to press OK — Ready…';
+  } catch(e) { alert(olErr(e)); }
+  finally {
+    if (ready && (!onlineRoom || !onlineRoom[`setup_ready_${onlineRoom.host_id === sbUser.id ? 'host' : 'guest'}`])) ready.disabled = false;
+  }
+}
+function olBindSetupButtons() {
+  olById('online-piece-choice-yes')?.addEventListener('click',()=>olSubmitSetupChoice(true));
+  olById('online-piece-choice-no')?.addEventListener('click',()=>olSubmitSetupChoice(false));
+  olById('online-piece-setup-ready')?.addEventListener('click',olSubmitSetupReady);
+  olById('online-piece-setup-reset')?.addEventListener('click',olResetOwnSetup);
+}
+document.addEventListener('DOMContentLoaded',olBindSetupButtons);
+
 /* ------------------------------------------------------------------ panel + buttons in the game screen */
 function olSetStatus(text, dot) { const t = olById('online-status-text'); if (t) t.textContent = text; const d = olById('online-dot'); if (d) d.classList.toggle('connected', !!dot); }
 function olUpdatePanel() {
@@ -594,6 +716,8 @@ function olUpdatePanel() {
   show(dBtn, r.status === 'playing'); show(rBtn, r.status === 'playing' || r.status === 'waiting');
   rBtn.textContent = r.status === 'waiting' ? '✕ Cancel room' : '🏳 Resign • ចុះចាញ់';
   if (r.status === 'waiting') { olSetStatus('Waiting for an opponent…', onlineConnected); info.textContent = `Room code: ${r.code}  •  ${olTimeLabel(r.minutes)}  •  you are ${olColorName(myRole)}`; }
+  else if (r.status === 'setup_choice') { olSetStatus('Choose whether to customize pieces', onlineConnected); info.textContent = `Room ${r.code} • both players must choose`; }
+  else if (r.status === 'setup') { olSetStatus('Custom piece setup', onlineConnected); info.textContent = `Room ${r.code} • ${r.setup_ready_host || r.setup_ready_guest ? 'waiting for both players to be ready' : 'adjust your own pieces'}`; }
   else if (r.status === 'playing') {
     const yours = r.turn === myRole;
     olSetStatus(`${me} (${olColorName(myRole)}) vs ${olOpponentName()} — ${yours ? 'YOUR TURN' : 'opponent’s turn'}`, onlineConnected);
