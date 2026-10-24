@@ -751,7 +751,7 @@ async function olRematch() {
 /* ------------------------------------------------------------------ before the game: adjust your own pieces (handicap) */
 let olSetups = null;                       // rows {color, pieces} once both players are ready; pieces = "std" or [[square, type], ...]
 let setupGrid = {}, setupSel = null, setupEditorOpen = false, setupSubmitting = false, setupRows = [], setupCols = [], setupStd = {};
-const SETUP_TOTAL = { q: 1, r: 2, b: 2, n: 2 };                    // pawns + promoted pawns share 8
+const SETUP_TOTAL = { q: 1, r: 2, b: 2, n: 2 };                    // pawns and promoted pawns: any number (16 pieces in total at most)
 function olReadyOf(r, color) { return !!(color === 'w' ? r.setup_ready_w : r.setup_ready_b); }
 function olApplySetupsToBoard() {                                    // boardState is the standard start when this runs
   if (!olSetups) return;
@@ -817,7 +817,10 @@ function olSetupCounts() {
   for (const sq in setupGrid) n[setupGrid[sq]]++;
   return n;
 }
-function olSetupAvail(t) { const n = olSetupCounts(); return t === 'p' || t === 'u' ? 8 - n.p - n.u : SETUP_TOTAL[t] - n[t]; }
+function olSetupAvail(t) {                                           // pawns / promoted pawns: any number, as long as there is a free place (16 pieces max)
+  if (t === 'p' || t === 'u') return 16 - Object.keys(setupGrid).length;
+  return SETUP_TOTAL[t] - olSetupCounts()[t];
+}
 function olSetupGlyph(t) {
   const w = olEl('span', 'sx-pc');
   try { w.appendChild(buildPieceElement({ c: myRole, t: t === 'u' ? 'p' : t })); } catch (e) { w.textContent = unicodeFor({ c: myRole, t: t === 'u' ? 'p' : t }); }
@@ -833,14 +836,15 @@ function olRenderSetup() {
   }
   const rack = olById('setup-rack'); rack.textContent = '';
   for (const t of ['q', 'r', 'b', 'n', 'p', 'u']) {
-    const av = olSetupAvail(t), total = (t === 'p' || t === 'u') ? 8 : SETUP_TOTAL[t];
+    const av = olSetupAvail(t), isP = (t === 'p' || t === 'u'), total = SETUP_TOTAL[t];
     const chip = olEl('div', 'sx-chip' + (setupSel === t ? ' sel' : '') + (av <= 0 ? ' empty' : ''));
-    chip.appendChild(olSetupGlyph(t)); chip.appendChild(olEl('small', null, `${av}/${total}`));
+    chip.appendChild(olSetupGlyph(t)); chip.appendChild(olEl('small', null, isP ? (av > 0 ? `+${av}` : 'full') : `${av}/${total}`));
     chip.addEventListener('click', () => { if (olSetupAvail(t) <= 0) return; setupSel = (setupSel === t) ? null : t; olById('setup-msg').textContent = ''; olRenderSetup(); });
     rack.appendChild(chip);
   }
   const n = olSetupCounts(), cnt = Object.keys(setupGrid).length;
-  olById('setup-count').textContent = `Your pieces: ${cnt} / 16` + (cnt < 16 ? ' — your opponent gets an advantage' : '');
+  const pw = n.p + n.u;
+  olById('setup-count').textContent = `Your pieces: ${cnt} / 16` + (pw > 8 ? ` • ${pw} pawns` : '') + (cnt < 16 ? ' — your opponent gets an advantage' : '');
 }
 function olSetupMsg(text) { const m = olById('setup-msg'); m.textContent = text; m.style.color = '#fca5a5'; }
 function olSetupTap(sq) {
