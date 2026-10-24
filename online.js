@@ -91,6 +91,14 @@ function onlineSendChat(text) {
 }
 
 /* ------------------------------------------------------------------ setup / auth */
+/* Web address of the game. Inside an installed Android app the page runs from file:// or a local address,
+   so emails / invite links must point to the public web address from config.js (SITE_URL). */
+function olSiteUrl() {
+  const cfg = window.KHMER_CONFIG || {};
+  if (cfg.SITE_URL && /^https?:\/\//.test(cfg.SITE_URL)) return cfg.SITE_URL;
+  if (/^https?:$/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return location.origin + location.pathname;
+  return undefined;
+}
 function olInit() {
   if (sb) return true;
   const cfg = window.KHMER_CONFIG || {};
@@ -148,7 +156,7 @@ async function olAuthSubmit() {
       if (name.length < 2 || name.length > 24) throw new Error('Display name must be 2–24 characters.');
       if (password.length < 6) throw new Error('Password must be at least 6 characters.');
       const { data, error } = await sb.auth.signUp({
-        email, password, options: { data: { display_name: name }, emailRedirectTo: location.origin + location.pathname }
+        email, password, options: { data: { display_name: name }, emailRedirectTo: olSiteUrl() }
       });
       if (error) throw error;
       if (!data.session) { olAuthMsg('Account created. Check your email and tap the confirmation link, then sign in.', true); olAuthTab('in'); btn.disabled = false; return; }
@@ -165,7 +173,7 @@ async function olForgotPassword() {
   if (!olInit()) return;
   const email = olById('auth-email').value.trim();
   if (!email) { olAuthMsg('Type your email above first.'); return; }
-  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: olSiteUrl() });
   if (error) olAuthMsg(olErr(error)); else olAuthMsg('Password reset email sent. Open the link on this device.', true);
 }
 async function olNewPassword() {
@@ -283,6 +291,7 @@ function olResetBoardForRoom() {
   olById('chat-messages').textContent = ''; onlineLastMsgId = 0;
 }
 async function olEnterRoom(room) {
+  olIncomingRematch = null; olHideRematchBar();
   olUnsubscribe();
   const token = ++onlineLoadToken;
   onlineLoading = true;
@@ -333,7 +342,7 @@ function olUnsubscribe() {
   onlineChannel = null; clearInterval(onlinePollTimer); onlinePollTimer = null; clearTimeout(onlinePumpTimer);
   onlineConnected = false;
 }
-function olLeaveRoomView() { olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
+function olLeaveRoomView() { olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
 function onlineLeave() {                               // called by the game whenever the mode is switched / reset
   olLeaveRoomView(); closeLobby(); olCloseAuth(); onlineReplaying = false;
 }
@@ -403,6 +412,14 @@ function olOnMessage(m, fromHistory) {
   if (!m || m.id <= onlineLastMsgId) return;
   onlineLastMsgId = m.id;
   const mine = sbUser && m.user_id === sbUser.id;
+  if (typeof m.body === 'string' && m.body.startsWith(OL_REMATCH)) {                 // rematch invitation (not a normal chat line)
+    const code = m.body.slice(OL_REMATCH.length).trim().toUpperCase();
+    if (!mine) {
+      appendChatMessage(onlineRoom ? olOpponentName() : 'Opponent', '🔁 Rematch! Room code: ' + code);
+      if (!fromHistory) olOnRematchInvite(code);
+    }
+    return;
+  }
   if (mine && !fromHistory) return;                              // already shown when we sent it
   const name = mine ? 'You' : (onlineRoom ? (m.user_id === onlineRoom.host_id ? onlineRoom.host_name : onlineRoom.guest_name) : 'Opponent');
   appendChatMessage(name || 'Opponent', m.body);
@@ -604,13 +621,121 @@ function olUpdateDrawBar() {
   bar.style.display = on ? 'flex' : 'none';
 }
 function olHideDrawBar() { const b = olById('draw-offer-bar'); if (b) b.style.display = 'none'; }
-function olInviteLink() { return location.origin + location.pathname + '?join=' + onlineRoom.code; }
+function olInviteLink() { return (olSiteUrl() || (location.origin + location.pathname)) + '?join=' + onlineRoom.code; }
 async function olInvite() {
   if (!onlineRoom) return;
   const link = olInviteLink(), text = `Play Khmer Chess with me! Room code: ${onlineRoom.code}`;
   try { if (navigator.share) { await navigator.share({ title: 'អុកចត្រង្គ Khmer Chess', text, url: link }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
   try { await navigator.clipboard.writeText(text + '\n' + link); appendChatMessage('System', 'Invite link copied. Send it to your friend.'); }
   catch (e) { prompt('Copy this invite link:', link); }
+}
+
+
+/* ------------------------------------------------------------------ generic confirm window */
+function askConfirm(title, text, okLabel, cb) {
+  olById('ask-title').textContent = title; olById('ask-text').textContent = text;
+  const ok = olById('ask-ok'); ok.textContent = okLabel || 'OK';
+  ok.onclick = () => { olById('ask-modal').classList.remove('active'); if (cb) cb(); };
+  olById('ask-modal').classList.add('active');
+}
+function askCancel() { olById('ask-modal').classList.remove('active'); }
+
+/* ------------------------------------------------------------------ result: win / loss event, record, play again */
+const OL_REMATCH = '🔁REMATCH:';
+let olIncomingRematch = null;
+function olUndecorateResult() {
+  const c = document.querySelector('#result-modal .modal-content'); if (c) c.classList.remove('res-win', 'res-loss', 'res-draw');
+  const o = olById('result-online'), s = olById('result-std'); if (o) o.style.display = 'none'; if (s) s.style.display = 'flex';
+}
+function olDecorateResult(winner, title, detail) {
+  const outcome = !winner ? 'draw' : (winner === myRole ? 'win' : 'loss');
+  const c = document.querySelector('#result-modal .modal-content');
+  c.classList.remove('res-win', 'res-loss', 'res-draw'); c.classList.add('res-' + outcome);
+  olById('result-icon').textContent = outcome === 'win' ? '🏆' : outcome === 'loss' ? '💔' : '🤝';
+  olById('result-title').textContent = outcome === 'win' ? 'YOU WIN! • អ្នកឈ្នះ' : outcome === 'loss' ? 'You lost • អ្នកចាញ់' : 'Draw • ស្មើ';
+  olById('result-detail').textContent = `${title}. ${detail}`;
+  olById('result-online').style.display = 'block'; olById('result-std').style.display = 'none';
+  olUpdateRematchButton();
+  olFillResultStats();
+  olResultEffect(outcome);
+}
+function olUpdateRematchButton() {
+  const b = olById('res-rematch-btn'); if (!b) return;
+  b.textContent = olIncomingRematch ? '🔁 Accept rematch!' : '🔁 Play again';
+  b.classList.toggle('btn-warning', !!olIncomingRematch); b.classList.toggle('btn-online', !olIncomingRematch);
+}
+async function olFillResultStats() {
+  const box = olById('result-stats'); if (!box || !sb || !sbUser || !onlineRoom) return;
+  const room = onlineRoom, me = sbUser.id, opp = room.host_id === me ? room.guest_id : room.host_id, oppName = olOpponentName();
+  box.textContent = sbProfile ? `Your record: 🏆 ${sbProfile.wins} win • ❌ ${sbProfile.losses} loss • 🤝 ${sbProfile.draws} draw` : '';
+  try {
+    await olLoadProfile();
+    box.textContent = `Your record: 🏆 ${sbProfile.wins} win • ❌ ${sbProfile.losses} loss • 🤝 ${sbProfile.draws} draw`;
+    const { data, error } = await sb.from('rooms').select('host_id,guest_id,host_color,result,status').eq('status', 'finished').in('host_id', [me, opp]).order('created_at', { ascending: false }).limit(200);
+    if (error) throw error;
+    let w = 0, l = 0, d = 0;
+    (data || []).forEach(r => {
+      if (!((r.host_id === me && r.guest_id === opp) || (r.host_id === opp && r.guest_id === me))) return;
+      const myColor = r.host_id === me ? r.host_color : (r.host_color === 'w' ? 'b' : 'w');
+      if (r.result === 'draw') d++; else if (r.result === myColor) w++; else if (r.result) l++;
+    });
+    box.appendChild(document.createElement('br'));
+    box.appendChild(document.createTextNode(`You vs ${oppName}: ${w} – ${l}` + (d ? ` (${d} draw${d > 1 ? 's' : ''})` : '')));
+  } catch (e) {}
+}
+function olResultEffect(outcome) {
+  try {
+    if (outcome === 'win') { olConfetti(); playSound('check'); setTimeout(() => playSound('move'), 220); if (navigator.vibrate) navigator.vibrate([60, 40, 60, 40, 140]); }
+    else if (outcome === 'loss') { playSound('check'); document.body.classList.add('ol-shake'); setTimeout(() => document.body.classList.remove('ol-shake'), 600); if (navigator.vibrate) navigator.vibrate([140, 70, 140]); }
+  } catch (e) {}
+}
+function olConfetti() {
+  const cv = olById('ol-confetti'); if (!cv) return;
+  const dpr = window.devicePixelRatio || 1, W = cv.width = innerWidth * dpr, H = cv.height = innerHeight * dpr, g = cv.getContext('2d');
+  cv.style.display = 'block';
+  const colors = ['#fbbf24', '#f59e0b', '#34d399', '#60a5fa', '#f472b6', '#fde68a'];
+  const parts = Array.from({ length: 110 }, () => ({ x: Math.random() * W, y: -Math.random() * H * 0.5, vx: (Math.random() - 0.5) * 3 * dpr, vy: (2 + Math.random() * 4) * dpr, s: (5 + Math.random() * 7) * dpr, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3, c: colors[(Math.random() * colors.length) | 0] }));
+  const t0 = performance.now();
+  (function frame(now) {
+    const el = now - t0; g.clearRect(0, 0, W, H);
+    parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.04 * dpr; p.r += p.vr; g.save(); g.translate(p.x, p.y); g.rotate(p.r); g.fillStyle = p.c; g.globalAlpha = Math.max(0, 1 - el / 4200); g.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * 0.6); g.restore(); });
+    if (el < 4200) requestAnimationFrame(frame); else { g.clearRect(0, 0, W, H); cv.style.display = 'none'; }
+  })(t0);
+}
+
+/* ------------------------------------------------------------------ rematch (play again with the same opponent) */
+function olShowRematchBar(name) {
+  const bar = olById('rematch-bar'); if (!bar) return;
+  olById('rematch-text').textContent = `🔁 ${name} wants a rematch`;
+  const resultOpen = olById('result-modal').classList.contains('active');
+  bar.style.display = resultOpen ? 'none' : 'flex';
+}
+function olHideRematchBar() { const b = olById('rematch-bar'); if (b) b.style.display = 'none'; }
+function olOnRematchInvite(code) {
+  olIncomingRematch = code;
+  olUpdateRematchButton(); olShowRematchBar(olOpponentName());
+  try { if (navigator.vibrate) navigator.vibrate(80); } catch (e) {}
+}
+async function olRematch() {
+  const old = onlineRoom; if (!old || !sb) return;
+  olHideRematchBar();
+  try {
+    if (!olIncomingRematch) {                                    // did the opponent already invite us a moment ago?
+      const { data: late } = await sb.from('room_messages').select('*').eq('room_id', old.id).gt('id', onlineLastMsgId).order('id');
+      (late || []).forEach(x => olOnMessage(x, false));
+    }
+    if (olIncomingRematch) {
+      const code = olIncomingRematch; olIncomingRematch = null;
+      olById('result-modal').classList.remove('active'); await olJoinByCode(code); return;
+    }
+    const opp = olOpponentName();
+    const { data, error } = await sb.rpc('create_room', { p_color: myRole === 'w' ? 'b' : 'w', p_minutes: old.minutes, p_first_turn: old.first_turn, p_public: false });
+    if (error) throw error;
+    await sb.rpc('send_message', { p_room: old.id, p_body: OL_REMATCH + data.code });
+    olById('result-modal').classList.remove('active');
+    await olEnterRoom(data);
+    appendChatMessage('System', `Rematch invite sent. Waiting for ${opp}… (code ${data.code})`);
+  } catch (e) { alert(olErr(e)); }
 }
 
 /* ------------------------------------------------------------------ start-up: invite links (?join=CODE) */
