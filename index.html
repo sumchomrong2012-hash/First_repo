@@ -578,10 +578,7 @@
             .center-column > .board-wrapper{grid-column:1;grid-row:1 / span 14;align-self:start;}
             .center-column > :not(.board-wrapper){grid-column:2;width:100% !important;max-width:none;margin-left:0;margin-right:0;}
         }
-    body.online-setup-active #training-wrap-white, body.online-setup-active #training-wrap-black{display:none!important;}
-body.online-setup-active #training-wrap-white.online-own-tray, body.online-setup-active #training-wrap-black.online-own-tray{display:flex!important;}
-body.online-setup-active #training-start-bar{display:none!important;}
-</style>
+    </style>
 </head>
 <body>
 
@@ -1512,28 +1509,7 @@ const KhmerEngine = (function () {
            _internal: { gen, make, unmake, attacked, board, evaluate, MAXM, moveBuf, getStm: () => stm, getKing: () => kingSq } };
 })();
 </script>
-<div class="modal" id="online-piece-choice-modal" style="z-index:10050;">
-  <div class="modal-content" style="max-width:420px;text-align:center;padding:22px;">
-    <h2 style="margin:0 0 10px;color:#f8fafc;">Customize pieces?</h2>
-    <p style="color:#cbd5e1;line-height:1.55;">Would you like to remove pieces or add promoted pawns before this online game?</p>
-    <div style="display:flex;gap:10px;margin-top:18px;">
-      <button class="btn" id="online-piece-choice-no" style="flex:1;justify-content:center;">No — Play standard</button>
-      <button class="btn btn-online" id="online-piece-choice-yes" style="flex:1;justify-content:center;">Yes — Setup board</button>
-    </div>
-    <p id="online-piece-choice-status" style="font-size:12px;color:#94a3b8;margin:12px 0 0;"></p>
-  </div>
-</div>
-<div class="modal" id="online-piece-setup-modal" style="z-index:10040;">
-  <div class="modal-content" style="max-width:500px;text-align:center;padding:18px;">
-    <h2 style="margin:0 0 8px;color:#f8fafc;">Online Piece Setup</h2>
-    <p id="online-piece-setup-status" style="color:#cbd5e1;">Adjust only your own pieces using your side's tray. Drag/tap pieces to remove them; add pieces or promoted pawns from the tray.</p>
-    <div style="display:flex;gap:10px;margin-top:12px;">
-      <button class="btn btn-online" id="online-piece-setup-ready" style="flex:1;justify-content:center;">OK — Ready</button>
-      <button class="btn" id="online-piece-setup-reset" style="justify-content:center;">Reset my side</button>
-    </div>
-  </div>
-</div>
-<script src="online.js?v=11"></script>
+<script src="online.js?v=10"></script>
 <script>
         /* CONSTANTS */
         // iOS Safari doesn't implement HTML5 drag-and-drop over touch, but
@@ -2074,11 +2050,6 @@ const pieceImagesCustom = {
         }
         function handleTrainingBoardClick(r, c) {
             const p = boardState[r]?.[c];
-            if (currentMode === 'online' && window.onlineSetupActive) {
-                const own = window.onlineSetupColor;
-                if (p && p.c !== own) { shakeSquare(r,c); return; }
-                if (trainingDragSource?.type === 'tray' && trainingDragSource.color !== own) return;
-            }
             if (trainingDragPiece && trainingDragSource?.type === 'tray') {
                 if (p) {
                     returnPieceToTray(p); boardState[r][c] = null;
@@ -2109,12 +2080,6 @@ const pieceImagesCustom = {
         }
         function handleTrainingBoardDrop(r, c, e) {
             e.preventDefault();
-            if (currentMode === 'online' && window.onlineSetupActive) {
-                const own = window.onlineSetupColor, target = boardState[r]?.[c];
-                if ((target && target.c !== own) || (trainingDragSource?.type === 'tray' && trainingDragSource.color !== own)) {
-                    trainingDragPiece = null; trainingDragSource = null; shakeSquare(r,c); return;
-                }
-            }
             const piece = trainingDragPiece; if (!piece) return;
             const targetPiece = boardState[r][c];
             const source = trainingDragSource;
@@ -2525,7 +2490,7 @@ const pieceImagesCustom = {
         function renderBoard() {
             const boardElement = document.getElementById('chess-board'); if (!boardElement) return;
             boardElement.innerHTML = ''; squareRefs = {};
-            const isTraining = currentMode === 'training' || (currentMode === 'online' && window.onlineSetupActive);
+            const isTraining = currentMode === 'training';
             const whiteInCheck = !isTraining && inCheck(boardState, 'w');
             const blackInCheck = !isTraining && inCheck(boardState, 'b');
             const whiteKingPos = whiteInCheck ? findKing(boardState, 'w') : null;
@@ -2553,7 +2518,6 @@ const pieceImagesCustom = {
                         square.draggable = IS_TOUCH_DEVICE ? false : !!piece;
                         square.addEventListener('dragstart', (e) => {
                             if (!piece) { e.preventDefault(); return; }
-                            if (currentMode === 'online' && window.onlineSetupActive && piece.c !== window.onlineSetupColor) { e.preventDefault(); return; }
                             trainingDragPiece = { ...piece }; trainingDragSource = { type: 'board', r, c };
                             e.dataTransfer.setData('text/plain', `board-${r}-${c}`);
                             e.dataTransfer.effectAllowed = 'move';
