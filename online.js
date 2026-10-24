@@ -23,7 +23,7 @@ const OL_ERR = {
   bad_ply: 'Game was out of sync — reloading.', game_not_active: 'This game is not active.',
   not_in_room: 'You are not a player in this room.', name_taken: 'That display name is taken.',
   bad_name: 'Display name must be 2–24 characters.', not_expired: 'Time has not expired yet.',
-  no_offer: 'There is no draw offer to answer.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
+  no_offer: 'There is no draw offer to answer.', bad_setup: 'That setup is not allowed.', setup_done: 'You already finished your setup.', no_setup: 'The setup phase is over.', setup_pending: 'Both players must finish setting up first.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
 };
 function olErr(e) { const m = (e && e.message) || String(e); for (const k in OL_ERR) if (m.includes(k)) return OL_ERR[k]; return m; }
 function olEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -34,7 +34,7 @@ function olTimeLabel(m) { return m > 0 ? m + ' min' : 'No clock'; }
 
 /* ------------------------------------------------------------------ hooks used by the game */
 function onlineBlocked() {
-  return currentMode === 'online' && (!onlineRoom || onlineRoom.status !== 'playing' || turn !== myRole);
+  return currentMode === 'online' && (!onlineRoom || onlineRoom.status !== 'playing' || !!onlineRoom.setup_pending || turn !== myRole);
 }
 // Called by the game right after a move is made on THIS screen (the game has already updated the board).
 function evalOnlineResult(mover, expired) {
@@ -276,10 +276,10 @@ async function olLoadOpenRooms() {
 }
 
 /* ------------------------------------------------------------------ entering / leaving a room */
-function olResetBoardForRoom() {
+function olResetBoardForRoom(keepChat) {
   stopTimer(); hideKingEmergency(); hideCountingBadge();
   countingActive = false; countingUsedOnce = false; countingRegime = null;
-  setupStandardPosition();
+  setupStandardPosition(); olApplySetupsToBoard();
   capturedPieces = { w: [], b: [] }; turn = onlineRoom.first_turn || 'w'; moveNumber = 1;
   selectedSquare = null; legalMovesCache = []; lastMove = null; historyStack = []; redoStack = [];
   gameOver = false; isAnimating = false; aiSide = 'off';
@@ -288,10 +288,10 @@ function olResetBoardForRoom() {
   baseMatchControl = onlineRoom.minutes > 0 ? onlineRoom.minutes * 60 : Infinity;
   whiteMatchTime = blackMatchTime = baseMatchControl; whiteTurnTime = blackTurnTime = Infinity;
   olById('result-modal').classList.remove('active');
-  olById('chat-messages').textContent = ''; onlineLastMsgId = 0;
+  if (!keepChat) { olById('chat-messages').textContent = ''; onlineLastMsgId = 0; }
 }
 async function olEnterRoom(room) {
-  olIncomingRematch = null; olHideRematchBar();
+  olIncomingRematch = null; olHideRematchBar(); olSetups = null; olHideSetupUI();
   olUnsubscribe();
   const token = ++onlineLoadToken;
   onlineLoading = true;
@@ -311,14 +311,16 @@ function olOnlyIfOnlineMode() {                       // make sure the UI is in 
 }
 async function olLoadAll(token) {
   const id = onlineRoom.id;
-  const [r, m, c] = await Promise.all([
+  const [r, m, c, su] = await Promise.all([
     sb.rpc('get_room', { p_room: id }),
     sb.from('moves').select('*').eq('room_id', id).order('ply'),
-    sb.from('room_messages').select('*').eq('room_id', id).order('id')
+    sb.from('room_messages').select('*').eq('room_id', id).order('id'),
+    sb.from('room_setups').select('color,pieces').eq('room_id', id)
   ]);
   if (token !== onlineLoadToken) return;               // user moved on to another room
   if (r.error) { appendChatMessage('System', '⚠️ ' + olErr(r.error)); return; }
   onlineRoom = r.data; onlineServerOffset = Date.parse(r.data.server_now) - Date.now();
+  olSetups = (!r.data.setup_pending && !su.error && su.data && su.data.length) ? su.data : null;
   olResetBoardForRoom();
   onlineReplaying = true;
   try {
@@ -342,7 +344,7 @@ function olUnsubscribe() {
   onlineChannel = null; clearInterval(onlinePollTimer); onlinePollTimer = null; clearTimeout(onlinePumpTimer);
   onlineConnected = false;
 }
-function olLeaveRoomView() { olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
+function olLeaveRoomView() { olHideSetupUI(); olSetups = null; olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
 function onlineLeave() {                               // called by the game whenever the mode is switched / reset
   olLeaveRoomView(); closeLobby(); olCloseAuth(); onlineReplaying = false;
 }
@@ -450,7 +452,7 @@ function olOpenChatFromToast() { const dd = olById('chat-dropdown'); if (dd) dd.
 /* ------------------------------------------------------------------ room state, clocks, results */
 function olApplyRoom(room, silent) {
   if (!room || !onlineRoom || room.id !== onlineRoom.id) return;
-  const prev = onlineRoom.status;
+  const prev = onlineRoom.status, prevPending = !!onlineRoom.setup_pending;
   onlineRoom = room;
   if (room.server_now) onlineServerOffset = Date.parse(room.server_now) - Date.now();
   if (prev === 'waiting' && room.status === 'playing' && !silent) {
@@ -458,6 +460,8 @@ function olApplyRoom(room, silent) {
     try { playSound('move'); } catch (e) {}
   }
   olUpdatePanel(); olSetNames(room); olLoadAvatars(room); olUpdateDrawBar(); olSyncClocks(); updateUI();
+  if (prevPending && !room.setup_pending && room.status === 'playing' && !silent) olOnSetupDone();
+  olSetupCheck();
   if (room.status === 'finished' || room.status === 'cancelled') olFinalizeWhenIdle();
   if (room.status === 'playing') {
     if (onlineApplied < room.ply && !onlineIncoming.has(onlineApplied)) olCatchUp();
@@ -468,14 +472,14 @@ function olSyncClocks() {
   const r = onlineRoom; if (!r) return;
   if (!(r.minutes > 0)) { baseMatchControl = Infinity; whiteMatchTime = blackMatchTime = Infinity; updateTimerDisplay(); updateTimerActiveBox(); return; }
   const total = r.minutes * 60; baseMatchControl = total;
-  if (r.status === 'waiting' || !r.started_at) { whiteMatchTime = blackMatchTime = total; updateTimerDisplay(); updateTimerActiveBox(); return; }
+  if (r.status === 'waiting' || !r.started_at || r.setup_pending) { whiteMatchTime = blackMatchTime = total; updateTimerDisplay(); updateTimerActiveBox(); return; }
   if (onlineMoveTimes.length !== onlineApplied) return;          // a local move is still being confirmed — keep ticking as is
   const used = { w: 0, b: 0 }; let prev = Date.parse(r.started_at);
   for (const mt of onlineMoveTimes) { if (!mt) continue; used[mt.by] += Math.max(0, (mt.t - prev) / 1000); prev = mt.t; }
   if (r.status === 'playing') used[turn] += Math.max(0, (Date.now() + onlineServerOffset - prev) / 1000);
   whiteMatchTime = Math.max(0, total - used.w); blackMatchTime = Math.max(0, total - used.b);
   updateTimerDisplay(); updateTimerActiveBox();
-  if (r.status === 'playing' && !gameOver) { if (!timerInterval) startTimer(); else lastTickMs = performance.now(); }
+  if (r.status === 'playing' && !r.setup_pending && !gameOver) { if (!timerInterval) startTimer(); else lastTickMs = performance.now(); }
   else stopTimer();
 }
 const OL_REASON = { checkmate: 'Checkmate', resign: 'Resignation', timeout: 'Time out', agreement: 'Draw by agreement', stalemate: 'Stalemate', insufficient: 'Insufficient material', counting: 'Counting rule', draw: 'Draw' };
@@ -591,9 +595,14 @@ function olUpdatePanel() {
   const me = sbProfile ? sbProfile.display_name : 'Player';
   if (!r) { olSetStatus('Signed in as ' + me, true); info.textContent = ''; show(dBtn, false); show(rBtn, false); show(iBtn, false); return; }
   show(iBtn, r.status === 'waiting');
-  show(dBtn, r.status === 'playing'); show(rBtn, r.status === 'playing' || r.status === 'waiting');
+  show(dBtn, r.status === 'playing' && !r.setup_pending); show(rBtn, r.status === 'playing' || r.status === 'waiting');
   rBtn.textContent = r.status === 'waiting' ? '✕ Cancel room' : '🏳 Resign • ចុះចាញ់';
   if (r.status === 'waiting') { olSetStatus('Waiting for an opponent…', onlineConnected); info.textContent = `Room code: ${r.code}  •  ${olTimeLabel(r.minutes)}  •  you are ${olColorName(myRole)}`; }
+  else if (r.status === 'playing' && r.setup_pending) {
+    const mine = olReadyOf(r, myRole), theirs = olReadyOf(r, myRole === 'w' ? 'b' : 'w');
+    olSetStatus(`Setting up pieces — you: ${mine ? 'ready ✓' : 'choosing…'} • ${olOpponentName()}: ${theirs ? 'ready ✓' : 'choosing…'}`, onlineConnected);
+    info.textContent = `Room ${r.code}  •  ${olTimeLabel(r.minutes)}  •  the clock starts when both are ready`;
+  }
   else if (r.status === 'playing') {
     const yours = r.turn === myRole;
     olSetStatus(`${me} (${olColorName(myRole)}) vs ${olOpponentName()} — ${yours ? 'YOUR TURN' : 'opponent’s turn'}`, onlineConnected);
@@ -736,6 +745,121 @@ async function olRematch() {
     await olEnterRoom(data);
     appendChatMessage('System', `Rematch invite sent. Waiting for ${opp}… (code ${data.code})`);
   } catch (e) { alert(olErr(e)); }
+}
+
+
+/* ------------------------------------------------------------------ before the game: adjust your own pieces (handicap) */
+let olSetups = null;                       // rows {color, pieces} once both players are ready; pieces = "std" or [[square, type], ...]
+let setupGrid = {}, setupSel = null, setupEditorOpen = false, setupSubmitting = false, setupRows = [], setupCols = [], setupStd = {};
+const SETUP_TOTAL = { q: 1, r: 2, b: 2, n: 2 };                    // pawns + promoted pawns share 8
+function olReadyOf(r, color) { return !!(color === 'w' ? r.setup_ready_w : r.setup_ready_b); }
+function olApplySetupsToBoard() {                                    // boardState is the standard start when this runs
+  if (!olSetups) return;
+  const std = boardState.map(row => row.map(p => p ? { ...p } : null));
+  for (const row of olSetups) {
+    if (!Array.isArray(row.pieces)) continue;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) { const p = boardState[r][c]; if (p && p.c === row.color) boardState[r][c] = null; }
+    for (const pc of row.pieces) {
+      const sq = pc[0], t = pc[1], r = sq >> 3, c = sq & 7, o = std[r][c];
+      boardState[r][c] = { t, c: row.color, m: !(o && o.c === row.color && o.t === t) };      // moved-flag off only if it stands on its normal square
+    }
+  }
+}
+async function olLoadSetups(roomId) {
+  olSetups = null;
+  try { const { data, error } = await sb.from('room_setups').select('color,pieces').eq('room_id', roomId); if (!error && data && data.length) olSetups = data; } catch (e) {}
+  return olSetups;
+}
+function olHideSetupUI() { setupEditorOpen = false; const a = olById('setup-ask-modal'), b = olById('setup-modal'); if (a) a.classList.remove('active'); if (b) b.classList.remove('active'); }
+function olSetupCheck() {
+  const r = onlineRoom;
+  if (!r || r.status !== 'playing' || !r.setup_pending) { olHideSetupUI(); return; }
+  if (olReadyOf(r, myRole)) { olHideSetupUI(); return; }                 // I am ready: just wait for the other player
+  if (!setupEditorOpen && !olById('setup-ask-modal').classList.contains('active')) olById('setup-ask-modal').classList.add('active');
+  const theirs = olReadyOf(r, myRole === 'w' ? 'b' : 'w'), st = olById('setup-ask-status');
+  st.textContent = `${olOpponentName()}: ${theirs ? 'ready ✓' : 'choosing…'}`; st.style.color = theirs ? '#6ee7b7' : '#fbbf24';
+}
+function olSetupNo() { olSubmitSetup(null); }
+async function olSubmitSetup(pieces) {
+  if (setupSubmitting || !onlineRoom) return; setupSubmitting = true;
+  try {
+    const { data, error } = await sb.rpc('submit_setup', { p_room: onlineRoom.id, p_pieces: pieces });
+    if (error) throw error;
+    olHideSetupUI(); olApplyRoom(data);
+    if (data.setup_pending) appendChatMessage('System', `You are ready. Waiting for ${olOpponentName()}…`);
+  } catch (e) {
+    if (/setup_done|no_setup/.test((e && e.message) || '')) { olHideSetupUI(); olRefreshRoom(); } else alert(olErr(e));
+  }
+  setupSubmitting = false;
+}
+async function olOnSetupDone() {                                        // both ready: show the real starting position, clocks start
+  olHideSetupUI();
+  await olLoadSetups(onlineRoom.id);
+  if (onlineApplied === 0) { olResetBoardForRoom(true); renderBoard(); updateUI(); }
+  const custom = olSetups && olSetups.some(s => Array.isArray(s.pieces));
+  appendChatMessage('System', custom ? 'Both players are ready — pieces were adjusted. Game on!' : 'Both players are ready — game on!');
+  olSyncClocks(); olUpdatePanel();
+  try { playSound('move'); } catch (e) {}
+}
+function olSetupYes() {
+  const color = myRole, keep = boardState;
+  setupStandardPosition(); const std = boardState; boardState = keep;
+  setupRows = color === 'w' ? [5, 6, 7] : [2, 1, 0];
+  setupCols = color === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];     // shown the way you will see the real board
+  setupStd = {};
+  for (const r of setupRows) for (const c of setupCols) { const p = std[r][c]; if (p && p.c === color) setupStd[r * 8 + c] = p.t; }
+  setupGrid = { ...setupStd }; setupSel = null; setupEditorOpen = true;
+  olById('setup-ask-modal').classList.remove('active'); olById('setup-msg').textContent = '';
+  olRenderSetup(); olById('setup-modal').classList.add('active');
+}
+function olSetupCounts() {
+  const n = { k: 0, q: 0, r: 0, b: 0, n: 0, p: 0, u: 0 };
+  for (const sq in setupGrid) n[setupGrid[sq]]++;
+  return n;
+}
+function olSetupAvail(t) { const n = olSetupCounts(); return t === 'p' || t === 'u' ? 8 - n.p - n.u : SETUP_TOTAL[t] - n[t]; }
+function olSetupGlyph(t) {
+  const w = olEl('span', 'sx-pc');
+  try { w.appendChild(buildPieceElement({ c: myRole, t: t === 'u' ? 'p' : t })); } catch (e) { w.textContent = unicodeFor({ c: myRole, t: t === 'u' ? 'p' : t }); }
+  if (t === 'u') w.appendChild(olEl('span', 'chip-crown', '👑'));
+  return w;
+}
+function olRenderSetup() {
+  const board = olById('setup-board'); board.textContent = '';
+  for (const r of setupRows) for (const c of setupCols) {
+    const sq = r * 8 + c, cell = olEl('div', 'sx-sq ' + (((r + c) % 2) ? 'dark' : 'light'));
+    if (sq in setupGrid) cell.appendChild(olSetupGlyph(setupGrid[sq]));
+    cell.addEventListener('click', () => olSetupTap(sq)); board.appendChild(cell);
+  }
+  const rack = olById('setup-rack'); rack.textContent = '';
+  for (const t of ['q', 'r', 'b', 'n', 'p', 'u']) {
+    const av = olSetupAvail(t), total = (t === 'p' || t === 'u') ? 8 : SETUP_TOTAL[t];
+    const chip = olEl('div', 'sx-chip' + (setupSel === t ? ' sel' : '') + (av <= 0 ? ' empty' : ''));
+    chip.appendChild(olSetupGlyph(t)); chip.appendChild(olEl('small', null, `${av}/${total}`));
+    chip.addEventListener('click', () => { if (olSetupAvail(t) <= 0) return; setupSel = (setupSel === t) ? null : t; olById('setup-msg').textContent = ''; olRenderSetup(); });
+    rack.appendChild(chip);
+  }
+  const n = olSetupCounts(), cnt = Object.keys(setupGrid).length;
+  olById('setup-count').textContent = `Your pieces: ${cnt} / 16` + (cnt < 16 ? ' — your opponent gets an advantage' : '');
+}
+function olSetupMsg(text) { const m = olById('setup-msg'); m.textContent = text; m.style.color = '#fca5a5'; }
+function olSetupTap(sq) {
+  const t = setupGrid[sq];
+  if (t) {
+    if (setupSel === 'u' && t === 'p') { setupGrid[sq] = 'u'; setupSel = null; }                   // promote this pawn
+    else if (t === 'k') { olSetupMsg('The King cannot be removed.'); return; }
+    else delete setupGrid[sq];                                                                      // back to the rack
+  } else if (setupSel && olSetupAvail(setupSel) > 0) {
+    setupGrid[sq] = setupSel; if (olSetupAvail(setupSel) <= 0) setupSel = null;
+  } else if (!setupSel) { olSetupMsg('Pick a piece below first, then tap an empty square.'); return; }
+  olById('setup-msg').textContent = ''; olRenderSetup();
+}
+function olSetupReset() { setupGrid = { ...setupStd }; setupSel = null; olById('setup-msg').textContent = ''; olRenderSetup(); }
+function olSetupCancel() { setupEditorOpen = false; olById('setup-modal').classList.remove('active'); olById('setup-ask-modal').classList.add('active'); }
+function olSetupOk() {
+  const same = Object.keys(setupStd).length === Object.keys(setupGrid).length && Object.keys(setupGrid).every(sq => setupStd[sq] === setupGrid[sq]);
+  const pieces = same ? null : Object.keys(setupGrid).map(sq => [Number(sq), setupGrid[sq]]);
+  olSubmitSetup(pieces);
 }
 
 /* ------------------------------------------------------------------ start-up: invite links (?join=CODE) */
