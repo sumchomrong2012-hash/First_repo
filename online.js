@@ -23,8 +23,9 @@ const OL_ERR = {
   bad_ply: 'Game was out of sync — reloading.', game_not_active: 'This game is not active.',
   not_in_room: 'You are not a player in this room.', name_taken: 'That display name is taken.',
   bad_name: 'Display name must be 2–24 characters.', not_expired: 'Time has not expired yet.',
-  no_offer: 'There is no draw offer to answer.', bad_setup: 'That setup is not allowed.', setup_done: 'You already finished your setup.', no_setup: 'The setup phase is over.', setup_pending: 'Both players must finish setting up first.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
+  no_offer: 'There is no draw offer to answer.', bad_setup: 'That setup is not allowed.', passkey_required: 'This room needs a passkey.', wrong_passkey: 'Wrong passkey.', bad_passkey: 'Passkey must be 2–20 characters.', user_not_found: 'No player has that display name.', cannot_add_self: 'You cannot add yourself.', already_friends: 'You are already friends.', already_requested: 'Request already sent.', not_friends: 'You can only invite friends.', invite_not_found: 'That invitation is no longer valid.', too_many_invites: 'Too many pending invitations.', setup_done: 'You already finished your setup.', no_setup: 'The setup phase is over.', setup_pending: 'Both players must finish setting up first.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
 };
+function olAlert(msg) { olToast('⚠️ ' + msg); }
 function olErr(e) { const m = (e && e.message) || String(e); for (const k in OL_ERR) if (m.includes(k)) return OL_ERR[k]; return m; }
 function olEl(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function olById(id) { return document.getElementById(id); }
@@ -125,6 +126,7 @@ async function onlineEnterMode() {
   await olLoadProfile();
   olUpdatePanel();
   if (currentMode !== 'online') return;
+  olUserSub();
   if (onlinePendingJoin) { const c = onlinePendingJoin; onlinePendingJoin = null; olJoinByCode(c); return; }
   if (!onlineRoom) openLobby();
 }
@@ -133,7 +135,7 @@ async function olLoadProfile() {
   sbProfile = data || { display_name: (sbUser.email || 'Player').split('@')[0], wins: 0, losses: 0, draws: 0 };
   olAvatarCache[sbUser.id] = sbProfile.avatar || null;
 }
-function olSyncMenuClass() { const on = olById('lobby-modal').classList.contains('active') || olById('auth-modal').classList.contains('active'); document.body.classList.toggle('ol-menu-open', on); }
+function olSyncMenuClass() { const on = ['lobby-modal', 'auth-modal', 'friends-modal', 'pass-modal'].some(id => { const e = olById(id); return e && e.classList.contains('active'); }); document.body.classList.toggle('ol-menu-open', on); }
 function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); olSyncMenuClass(); }
 function olCloseAuth() { olById('auth-modal').classList.remove('active'); olSyncMenuClass(); }
 function olAuthTab(t) {
@@ -180,11 +182,11 @@ async function olNewPassword() {
   const pw = prompt('Choose a new password (at least 6 characters):');
   if (!pw) return;
   const { error } = await sb.auth.updateUser({ password: pw });
-  alert(error ? olErr(error) : 'Password updated.');
+  olAlert(error ? olErr(error) : 'Password updated.');
 }
 async function olSignOut() {
   if (!sb) return;
-  closeLobby(); olLeaveRoomView();
+  closeLobby(); olLeaveRoomView(); olUserUnsub();
   await sb.auth.signOut(); sbUser = null; sbProfile = null;
   olUpdatePanel(); olOpenAuth();
 }
@@ -201,7 +203,7 @@ function openLobby() {
   onlineLobbyTimer = setInterval(() => { if (!document.hidden) olRefreshLobby(); }, 5000);
 }
 function closeLobby() { olById('lobby-modal').classList.remove('active'); olSyncMenuClass(); clearInterval(onlineLobbyTimer); onlineLobbyTimer = null; }
-async function olRefreshLobby() { olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadMyRooms(); olLoadOpenRooms(); }
+async function olRefreshLobby() { olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadMyRooms(); olLoadOpenRooms(); olRefreshInvites(); }
 function olRenderLobbyHeader() {
   if (!sbProfile) return;
   olById('ol-who').textContent = sbProfile.display_name;
@@ -215,31 +217,60 @@ function olFillCreateForm() {
 async function olCreateRoom() {
   const btn = olById('ol-create-btn'); btn.disabled = true;
   try {
-    const { data, error } = await sb.rpc('create_room', {
+    const args = {
       p_color: olById('ol-new-color').value, p_minutes: Number(olById('ol-new-time').value),
       p_first_turn: olById('ol-new-first').value, p_public: olById('ol-new-public').checked
-    });
+    };
+    const pass = olById('ol-new-pass').value.trim();
+    if (pass) { if (pass.length < 2) throw new Error('bad_passkey'); args.p_passkey = pass; }
+    const { data, error } = await sb.rpc('create_room', args);
     if (error) throw error;
+    olById('ol-new-pass').value = '';
     await olEnterRoom(data);
-  } catch (e) { alert(olErr(e)); }
+  } catch (e) { olAlert(olErr(e)); }
   btn.disabled = false;
 }
-async function olJoinByCode(code) {
-  code = (code || '').trim().toUpperCase(); if (!code) return;
+let olPassCode = null;
+function olJoinMsg(text, good) { const m = olById('ol-join-msg'); if (m) { m.textContent = text; m.style.color = good ? '#6ee7b7' : '#fca5a5'; } }
+async function olJoinByCode(code, passkey) {
+  code = (code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) { olJoinMsg('Type the 6-letter room code first.'); return; }
+  if (!sb || !sbUser) { onlinePendingJoin = code; olOpenAuth(); return; }
+  olJoinMsg('Joining room ' + code + '…', true);
   try {
-    if (!sbUser) { onlinePendingJoin = code; olOpenAuth(); return; }
-    const { data, error } = await sb.rpc('join_room', { p_code: code });
+    const { data, error } = await sb.rpc('join_room', passkey ? { p_code: code, p_passkey: passkey } : { p_code: code });
     if (error) throw error;
+    olJoinMsg(''); olClosePass();
+    const inp = olById('ol-join-code'); if (inp) inp.value = '';
     await olEnterRoom(data);
-  } catch (e) { alert(olErr(e)); openLobby(); }
+  } catch (e) {
+    const m = (e && e.message) || '';
+    if (/passkey_required/.test(m)) { olJoinMsg(''); olAskPasskey(code, false); return; }
+    if (/wrong_passkey/.test(m)) { olJoinMsg(''); olAskPasskey(code, true); return; }
+    olJoinMsg('Could not join: ' + olErr(e)); olAlert(olErr(e));
+    if (!olById('lobby-modal').classList.contains('active')) openLobby();
+  }
 }
-function olJoinFromInput() { const i = olById('ol-join-code'); olJoinByCode(i.value); i.value = ''; }
+function olAskPasskey(code, wrong) {
+  olPassCode = code;
+  olById('pass-text').textContent = `Room ${code} is locked. Ask the host for the passkey.`;
+  olById('pass-msg').textContent = wrong ? 'Wrong passkey — try again.' : ''; olById('pass-input').value = '';
+  olById('pass-modal').classList.add('active'); olSyncMenuClass();
+  setTimeout(() => { try { olById('pass-input').focus(); } catch (e) {} }, 200);
+}
+function olClosePass() { olById('pass-modal').classList.remove('active'); olSyncMenuClass(); }
+function olPassSubmit() {
+  const v = olById('pass-input').value.trim();
+  if (!v) { olById('pass-msg').textContent = 'Type the passkey.'; return; }
+  olJoinByCode(olPassCode, v);
+}
+function olJoinFromInput() { olJoinByCode(olById('ol-join-code').value); }
 function olRoomRow(r, mode) {
   const row = olEl('div', 'ol-row'); const meta = olEl('div', 'ol-meta');
   const mine = mode === 'mine';
   const myC = mine ? olMyColorIn(r) : (r.host_color === 'w' ? 'b' : 'w');
   const opp = mine ? (r.host_id === sbUser.id ? r.guest_name : r.host_name) : r.host_name;
-  const l1 = olEl('div', 'ol-l1', mine ? (opp ? 'vs ' + opp : 'Waiting for an opponent…') : (r.host_name || 'Player'));
+  const l1 = olEl('div', 'ol-l1', (r.has_passkey ? '🔒 ' : '') + (mine ? (opp ? 'vs ' + opp : 'Waiting for an opponent…') : (r.host_name || 'Player')));
   let status = '';
   if (mine) {
     if (r.status === 'waiting') status = 'Code ' + r.code;
@@ -346,7 +377,7 @@ function olUnsubscribe() {
 }
 function olLeaveRoomView() { olHideSetupUI(); olSetups = null; olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
 function onlineLeave() {                               // called by the game whenever the mode is switched / reset
-  olLeaveRoomView(); closeLobby(); olCloseAuth(); onlineReplaying = false;
+  olLeaveRoomView(); closeLobby(); olCloseAuth(); olCloseFriends(); olClosePass(); olUserUnsub(); onlineReplaying = false;
 }
 
 /* ------------------------------------------------------------------ realtime */
@@ -614,16 +645,17 @@ function olUpdatePanel() {
 async function olResign() {
   if (!onlineRoom) return;
   const waiting = onlineRoom.status === 'waiting';
-  if (!confirm(waiting ? 'Cancel this room?' : 'Resign this game?')) return;
-  try { const { data, error } = await sb.rpc('resign', { p_room: onlineRoom.id }); if (error) throw error; olApplyRoom(data); if (waiting) { olLeaveRoomView(); switchModeInternal('online'); } } catch (e) { alert(olErr(e)); }
+  askConfirm(waiting ? 'Cancel this room?' : 'Resign this game?', waiting ? 'The room will be closed.' : 'You will lose this game.', waiting ? 'Yes, cancel' : 'Yes, resign', async () => {
+    try { const { data, error } = await sb.rpc('resign', { p_room: onlineRoom.id }); if (error) throw error; olApplyRoom(data); if (waiting) { olLeaveRoomView(); switchModeInternal('online'); } } catch (e) { olAlert(olErr(e)); }
+  });
 }
 async function olOfferDraw() {
   if (!onlineRoom || onlineRoom.status !== 'playing') return;
-  try { const { data, error } = await sb.rpc('offer_draw', { p_room: onlineRoom.id }); if (error) throw error; olApplyRoom(data); appendChatMessage('System', 'Draw offer sent.'); } catch (e) { alert(olErr(e)); }
+  try { const { data, error } = await sb.rpc('offer_draw', { p_room: onlineRoom.id }); if (error) throw error; olApplyRoom(data); appendChatMessage('System', 'Draw offer sent.'); } catch (e) { olAlert(olErr(e)); }
 }
 async function olRespondDraw(accept) {
   if (!onlineRoom) return;
-  try { const { data, error } = await sb.rpc('respond_draw', { p_room: onlineRoom.id, p_accept: accept }); if (error) throw error; olApplyRoom(data); } catch (e) { alert(olErr(e)); }
+  try { const { data, error } = await sb.rpc('respond_draw', { p_room: onlineRoom.id, p_accept: accept }); if (error) throw error; olApplyRoom(data); } catch (e) { olAlert(olErr(e)); }
 }
 function olUpdateDrawBar(prevOffer) {
   const r = onlineRoom, bar = olById('draw-offer-bar'), sent = olById('draw-sent-bar'); if (!bar) return;
@@ -759,7 +791,7 @@ async function olRematch() {
     olById('result-modal').classList.remove('active');
     await olEnterRoom(data);
     appendChatMessage('System', `Rematch invite sent. Waiting for ${opp}… (code ${data.code})`);
-  } catch (e) { alert(olErr(e)); }
+  } catch (e) { olAlert(olErr(e)); }
 }
 
 
@@ -803,7 +835,7 @@ async function olSubmitSetup(pieces) {
     olHideSetupUI(); olApplyRoom(data);
     if (data.setup_pending) appendChatMessage('System', `You are ready. Waiting for ${olOpponentName()}…`);
   } catch (e) {
-    if (/setup_done|no_setup/.test((e && e.message) || '')) { olHideSetupUI(); olRefreshRoom(); } else alert(olErr(e));
+    if (/setup_done|no_setup/.test((e && e.message) || '')) { olHideSetupUI(); olRefreshRoom(); } else olAlert(olErr(e));
   }
   setupSubmitting = false;
 }
@@ -825,7 +857,8 @@ function olSetupYes() {
   for (const r of setupRows) for (const c of setupCols) { const p = std[r][c]; if (p && p.c === color) setupStd[r * 8 + c] = p.t; }
   setupGrid = { ...setupStd }; setupSel = null; setupEditorOpen = true;
   olById('setup-ask-modal').classList.remove('active'); olById('setup-msg').textContent = '';
-  olRenderSetup(); olById('setup-modal').classList.add('active');
+  olById('setup-modal').classList.add('active');
+  olRenderSetup(); requestAnimationFrame(olSizeSetupBoard); setTimeout(olSizeSetupBoard, 150);
 }
 function olSetupCounts() {
   const n = { k: 0, q: 0, r: 0, b: 0, n: 0, p: 0, u: 0 };
@@ -842,6 +875,15 @@ function olSetupGlyph(t) {
   if (t === 'u') w.appendChild(olEl('span', 'chip-crown', '👑'));
   return w;
 }
+function olSizeSetupBoard() {
+  const wrap = olById('setup-board-wrap'), board = olById('setup-board'); if (!wrap || !board) return;
+  const w = wrap.clientWidth || 0; if (w < 80) return;
+  const cell = Math.max(28, Math.min(52, Math.floor((w - 8) / 8)));
+  board.style.width = (cell * 8) + 'px'; board.style.height = (cell * 3) + 'px';
+  board.querySelectorAll('.sx-sq').forEach(c => { c.style.width = cell + 'px'; c.style.height = cell + 'px'; });
+}
+window.addEventListener('resize', () => { if (setupEditorOpen) olSizeSetupBoard(); });
+window.addEventListener('orientationchange', () => { setTimeout(() => { if (setupEditorOpen) olSizeSetupBoard(); }, 250); });
 function olRenderSetup() {
   const board = olById('setup-board'); board.textContent = '';
   for (const r of setupRows) for (const c of setupCols) {
@@ -857,6 +899,7 @@ function olRenderSetup() {
     chip.addEventListener('click', () => { if (olSetupAvail(t) <= 0) return; setupSel = (setupSel === t) ? null : t; olById('setup-msg').textContent = ''; olRenderSetup(); });
     rack.appendChild(chip);
   }
+  olSizeSetupBoard();
   const n = olSetupCounts(), cnt = Object.keys(setupGrid).length;
   const pw = n.p + n.u;
   olById('setup-count').textContent = `Your pieces: ${cnt} / 16` + (pw > 8 ? ` • ${pw} pawns` : '') + (cnt < 16 ? ' — your opponent gets an advantage' : '');
@@ -879,6 +922,127 @@ function olSetupOk() {
   const same = Object.keys(setupStd).length === Object.keys(setupGrid).length && Object.keys(setupGrid).every(sq => setupStd[sq] === setupGrid[sq]);
   const pieces = same ? null : Object.keys(setupGrid).map(sq => [Number(sq), setupGrid[sq]]);
   olSubmitSetup(pieces);
+}
+
+
+/* ------------------------------------------------------------------ friends + invitations */
+let olFriends = [], olFriendsInvite = false, olInvitedIds = new Set();
+let olInvites = [], olInviteSeen = new Set(), olInviteBarId = null, olUserChannel = null, olUserTimer = null;
+function olFriendsMsg(text, good) { const m = olById('fr-msg'); if (m) { m.textContent = text; m.style.color = good ? '#6ee7b7' : '#fca5a5'; } }
+async function olOpenFriends(inviteMode) {
+  if (!olInit() || !sbUser) { olOpenAuth(); return; }
+  olFriendsInvite = !!(inviteMode && onlineRoom && onlineRoom.status === 'waiting');
+  olById('fr-title').textContent = olFriendsInvite ? `Invite a friend to room ${onlineRoom.code}` : '👥 Friends • មិត្តភក្តិ';
+  olById('fr-share').style.display = olFriendsInvite ? 'flex' : 'none';
+  olFriendsMsg(''); olById('friends-modal').classList.add('active'); olSyncMenuClass();
+  await olLoadFriends();
+}
+function olCloseFriends() { const m = olById('friends-modal'); if (m) m.classList.remove('active'); olSyncMenuClass(); }
+async function olLoadAvatarsFor(ids) {
+  const need = ids.filter(id => id && !(id in olAvatarCache)); if (!need.length) return;
+  need.forEach(id => { olAvatarCache[id] = null; });
+  try { const { data } = await sb.from('profiles').select('id,avatar').in('id', need); (data || []).forEach(r => { olAvatarCache[r.id] = r.avatar || null; }); } catch (e) {}
+}
+async function olLoadFriends() {
+  const { data, error } = await sb.rpc('my_friends');
+  if (error) { olFriendsMsg(/my_friends|schema cache/i.test(error.message) ? 'Friends are not set up yet. Run update_friends_passkey.sql in Supabase.' : olErr(error)); return; }
+  olFriends = data || [];
+  await olLoadAvatarsFor(olFriends.map(f => f.id));
+  olRenderFriends();
+}
+function olPersonRow(f, extra) {
+  const row = olEl('div', 'ol-row'), av = olEl('span', 'ol-av mid'); olRenderAvatar(av, olAvatarCache[f.id], f.name);
+  const meta = olEl('div', 'ol-meta'); meta.appendChild(olEl('div', 'ol-l1', f.name));
+  if (extra && extra.sub) meta.appendChild(olEl('div', 'ol-l2', extra.sub));
+  row.appendChild(av); row.appendChild(meta);
+  const act = olEl('div', 'ol-actions'); (extra && extra.buttons || []).forEach(b => act.appendChild(b)); row.appendChild(act);
+  return row;
+}
+function olRenderFriends() {
+  const inc = olById('fr-incoming'), list = olById('fr-list'); inc.textContent = ''; list.textContent = '';
+  const incoming = olFriends.filter(f => f.state === 'incoming'), mine = olFriends.filter(f => f.state !== 'incoming');
+  olById('fr-in-card').style.display = incoming.length ? 'flex' : 'none';
+  incoming.forEach(f => inc.appendChild(olPersonRow(f, { sub: 'wants to be your friend', buttons: [
+    olBtn('Accept', 'btn btn-online', () => olFriendRespond(f.id, true)), olBtn('✕', 'btn', () => olFriendRespond(f.id, false))] })));
+  if (!mine.length) list.appendChild(olEl('div', 'ol-empty', 'No friends yet — add a friend by their display name.'));
+  mine.forEach(f => {
+    const buttons = [];
+    if (f.state === 'friend' && olFriendsInvite) buttons.push(olBtn(olInvitedIds.has(f.id) ? 'Invited ✓' : 'Invite', 'btn btn-online', () => olFriendInvite(f)));
+    buttons.push(olBtn('✕', 'btn', () => askConfirm(f.state === 'friend' ? 'Remove friend?' : 'Cancel request?', f.name, 'Yes', () => olFriendRemove(f.id))));
+    list.appendChild(olPersonRow(f, { sub: f.state === 'friend' ? 'friend' : 'request sent — waiting', buttons }));
+  });
+}
+async function olFriendAdd() {
+  const inp = olById('fr-name'), name = inp.value.trim(); if (!name) { olFriendsMsg('Type your friend’s display name.'); return; }
+  olFriendsMsg('Sending…', true);
+  try {
+    const { data, error } = await sb.rpc('friend_request', { p_name: name }); if (error) throw error;
+    inp.value = ''; olFriendsMsg(data.state === 'friend' ? `You and ${data.name} are now friends!` : `Request sent to ${data.name}.`, true);
+    await olLoadFriends();
+  } catch (e) { olFriendsMsg(olErr(e)); }
+}
+async function olFriendRespond(id, accept) { try { const { error } = await sb.rpc('friend_respond', { p_user: id, p_accept: accept }); if (error) throw error; await olLoadFriends(); } catch (e) { olFriendsMsg(olErr(e)); } }
+async function olFriendRemove(id) { try { const { error } = await sb.rpc('friend_remove', { p_user: id }); if (error) throw error; await olLoadFriends(); } catch (e) { olFriendsMsg(olErr(e)); } }
+async function olFriendInvite(f) {
+  if (!onlineRoom) return;
+  try {
+    const { error } = await sb.rpc('send_invite', { p_room: onlineRoom.id, p_friend: f.id }); if (error) throw error;
+    olInvitedIds.add(f.id); olRenderFriends(); olFriendsMsg(`Invitation sent to ${f.name}. They will see a Join button.`, true);
+    appendChatMessage('System', `Invitation sent to ${f.name}.`);
+  } catch (e) { olFriendsMsg(olErr(e)); }
+}
+function olUserSub() {
+  if (!sb || !sbUser || olUserChannel) return;
+  olUserChannel = sb.channel('user-' + sbUser.id)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'invites', filter: 'to_user=eq.' + sbUser.id }, () => olRefreshInvites())
+    .subscribe();
+  clearInterval(olUserTimer); olUserTimer = setInterval(() => { if (!document.hidden) olRefreshInvites(); }, 6000);
+  olRefreshInvites();
+}
+function olUserUnsub() {
+  if (olUserChannel && sb) { try { sb.removeChannel(olUserChannel); } catch (e) {} }
+  olUserChannel = null; clearInterval(olUserTimer); olUserTimer = null; olHideInviteBar();
+}
+async function olRefreshInvites() {
+  if (!sb || !sbUser) return;
+  try {
+    const { data, error } = await sb.rpc('my_invites'); if (error) return;
+    olInvites = data || []; olRenderLobbyInvites();
+    const fresh = olInvites.filter(i => !olInviteSeen.has(i.id));
+    fresh.forEach(i => olInviteSeen.add(i.id));
+    if (fresh.length) olShowInviteBar(fresh[0]);
+    else if (olInviteBarId && !olInvites.some(i => i.id === olInviteBarId)) olHideInviteBar();
+  } catch (e) {}
+}
+function olShowInviteBar(inv) {
+  olInviteBarId = inv.id;
+  olById('invite-text').textContent = `🎮 ${inv.from_name} invites you to play (${olTimeLabel(inv.minutes)})`;
+  olById('invite-bar').style.display = 'flex';
+  try { if (navigator.vibrate) navigator.vibrate([80, 40, 80]); } catch (e) {}
+}
+function olHideInviteBar() { const b = olById('invite-bar'); if (b) b.style.display = 'none'; olInviteBarId = null; }
+async function olInviteJoin(id) {
+  id = id || olInviteBarId; if (!id) return;
+  try {
+    const { data, error } = await sb.rpc('accept_invite', { p_invite: id }); if (error) throw error;
+    olHideInviteBar(); closeLobby(); olCloseFriends(); await olEnterRoom(data); olRefreshInvites();
+  } catch (e) { olHideInviteBar(); olAlert(olErr(e)); olRefreshInvites(); }
+}
+async function olInviteDecline(id) {
+  id = id || olInviteBarId; if (!id) return;
+  try { await sb.rpc('decline_invite', { p_invite: id }); } catch (e) {}
+  olHideInviteBar(); olRefreshInvites();
+}
+function olRenderLobbyInvites() {
+  const card = olById('ol-invites-card'), box = olById('ol-invites-list'); if (!card || !box) return;
+  box.textContent = ''; card.style.display = olInvites.length ? 'flex' : 'none';
+  olInvites.forEach(i => {
+    const row = olEl('div', 'ol-row'), meta = olEl('div', 'ol-meta');
+    meta.appendChild(olEl('div', 'ol-l1', '🎮 ' + i.from_name)); meta.appendChild(olEl('div', 'ol-l2', `invites you • ${olTimeLabel(i.minutes)}`));
+    row.appendChild(meta); const act = olEl('div', 'ol-actions');
+    act.appendChild(olBtn('Join • ចូល', 'btn btn-online', () => olInviteJoin(i.id))); act.appendChild(olBtn('✕', 'btn', () => olInviteDecline(i.id)));
+    row.appendChild(act); box.appendChild(row);
+  });
 }
 
 /* ------------------------------------------------------------------ start-up: invite links (?join=CODE) */
