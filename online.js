@@ -147,7 +147,7 @@ async function olLoadProfile() {
   sbProfile = data || { display_name: (sbUser.email || 'Player').split('@')[0], wins: 0, losses: 0, draws: 0 };
   olAvatarCache[sbUser.id] = sbProfile.avatar || null;
 }
-function olSyncMenuClass() { const on = ['lobby-modal', 'auth-modal', 'friends-modal', 'pass-modal', 'notif-modal', 'pview-modal'].some(id => { const e = olById(id); return e && e.classList.contains('active'); }); document.body.classList.toggle('ol-menu-open', on); }
+function olSyncMenuClass() { const on = ['lobby-modal', 'auth-modal', 'friends-modal', 'pass-modal', 'notif-modal', 'pview-modal', 'profile-modal', 'dm-modal'].some(id => { const e = olById(id); return e && e.classList.contains('active'); }); document.body.classList.toggle('ol-menu-open', on); }
 function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); olSyncMenuClass(); }
 function olCloseAuth() { olById('auth-modal').classList.remove('active'); olSyncMenuClass(); }
 function olAuthTab(t) {
@@ -155,33 +155,83 @@ function olAuthTab(t) {
   olById('auth-name-wrap').style.display = t === 'up' ? 'flex' : 'none';
   olById('auth-go').textContent = t === 'up' ? 'Create account • បង្កើតគណនី' : 'Sign in • ចូលគណនី';
   olById('auth-go').dataset.mode = t;
-  olById('auth-forgot').style.display = t === 'in' ? 'inline' : 'none';
+  olById('auth-otp-wrap').style.display = 'none';
+  olAuthMethod(olAuthMethodNow);
+}
+let olAuthMethodNow = (() => { try { return localStorage.getItem('khmerAuthMethod') === 'email' ? 'email' : 'phone'; } catch (e) { return 'phone'; } })();
+let olPendingPhone = null;
+function olAuthMethod(m) {                                    // phone number (default) or email
+  olAuthMethodNow = m; try { localStorage.setItem('khmerAuthMethod', m); } catch (e) {}
+  olById('auth-m-phone').classList.toggle('active', m === 'phone'); olById('auth-m-email').classList.toggle('active', m === 'email');
+  olById('auth-phone-wrap').style.display = m === 'phone' ? 'flex' : 'none'; olById('auth-email-wrap').style.display = m === 'email' ? 'flex' : 'none';
+  olById('auth-forgot').style.display = (m === 'email' && (olById('auth-go').dataset.mode || 'in') === 'in') ? 'inline' : 'none';
+  const cc = (window.KHMER_CONFIG && window.KHMER_CONFIG.COUNTRY_CODE) || '855'; olById('auth-cc').textContent = '+' + cc;
 }
 function olAuthMsg(text, good) { const m = olById('auth-msg'); m.textContent = text; m.style.color = good ? '#6ee7b7' : '#fca5a5'; }
+/* phone number -> digits with the country code (Cambodia +855 unless config.js says otherwise) */
+function olNormalizePhone(raw) {
+  const cc = String((window.KHMER_CONFIG && window.KHMER_CONFIG.COUNTRY_CODE) || '855');
+  let d = String(raw || '').trim(); const plus = d.startsWith('+'); d = d.replace(/[^0-9]/g, '');
+  if (!d) return null;
+  if (plus) { /* already international */ }
+  else if (d.startsWith('00')) d = d.slice(2);
+  else if (d.startsWith('0')) d = cc + d.slice(1);
+  else if (!d.startsWith(cc) || d.length <= 9) d = cc + d;
+  return (d.length >= 8 && d.length <= 15) ? d : null;
+}
+function olAuthCreds() {
+  const cfg = window.KHMER_CONFIG || {}, password = olById('auth-pass').value;
+  if (olAuthMethodNow === 'email') {
+    const email = olById('auth-email').value.trim(); if (!email || !password) throw new Error('Enter your email and password.');
+    return { kind: 'email', creds: { email, password } };
+  }
+  const n = olNormalizePhone(olById('auth-phone').value);
+  if (!n || !password) throw new Error(n ? 'Enter your password.' : 'Enter a valid phone number.');
+  if ((cfg.PHONE_MODE || 'virtual') === 'sms') return { kind: 'sms', phone: '+' + n, creds: { phone: '+' + n, password } };
+  return { kind: 'virtual', creds: { email: 'p' + n + '@' + (cfg.PHONE_EMAIL_DOMAIN || 'phone.khmerchess.invalid'), password } };
+}
+function olAuthHint(e, kind) {
+  const m = (e && e.message) || String(e);
+  if (kind === 'virtual' && /valid|invalid|domain/i.test(m) && /email/i.test(m)) return m + ' — Supabase refused the hidden address used for phone numbers. Set PHONE_EMAIL_DOMAIN in config.js to a domain that can receive mail, or use PHONE_MODE "sms".';
+  if (kind === 'sms' && /phone|sms|provider/i.test(m) && /disabled|not enabled|unsupported|provider/i.test(m)) return m + ' — Enable the Phone provider (and an SMS service) in Supabase → Authentication → Providers.';
+  if (/Invalid login credentials/i.test(m) && kind !== 'email') return 'Wrong phone number or password. Use the same phone number you registered with.';
+  return olErr(e);
+}
 async function olAuthSubmit() {
   if (!olInit()) { olAuthMsg('Not configured: edit config.js'); return; }
-  const email = olById('auth-email').value.trim(), password = olById('auth-pass').value;
-  const mode = olById('auth-go').dataset.mode || 'in';
-  if (!email || !password) { olAuthMsg('Enter your email and password.'); return; }
-  const btn = olById('auth-go'); btn.disabled = true; olAuthMsg('Please wait…', true);
+  const mode = olById('auth-go').dataset.mode || 'in', btn = olById('auth-go');
+  let cred; try { cred = olAuthCreds(); } catch (e) { olAuthMsg(e.message); return; }
+  btn.disabled = true; olAuthMsg('Please wait…', true);
   try {
     if (mode === 'up') {
       const name = olById('auth-name').value.trim();
       if (name.length < 2 || name.length > 24) throw new Error('Display name must be 2–24 characters.');
-      if (password.length < 6) throw new Error('Password must be at least 6 characters.');
-      const { data, error } = await sb.auth.signUp({
-        email, password, options: { data: { display_name: name }, emailRedirectTo: olSiteUrl() }
-      });
+      if (olById('auth-pass').value.length < 6) throw new Error('Password must be at least 6 characters.');
+      const opts = { data: { display_name: name } }; if (cred.kind === 'email') opts.emailRedirectTo = olSiteUrl();
+      const { data, error } = await sb.auth.signUp(Object.assign({}, cred.creds, { options: opts }));
       if (error) throw error;
-      if (!data.session) { olAuthMsg('Account created. Check your email and tap the confirmation link, then sign in.', true); olAuthTab('in'); btn.disabled = false; return; }
+      if (!data.session) {
+        if (cred.kind === 'sms') { olPendingPhone = cred.phone; olById('auth-otp-wrap').style.display = 'flex'; olAuthMsg('We sent a code by SMS. Type it below.', true); btn.disabled = false; return; }
+        olAuthMsg(cred.kind === 'virtual' ? 'Account created, but Supabase still wants an email confirmation. Turn OFF "Confirm email" in Supabase → Authentication → Providers → Email, then sign in.' : 'Account created. Check your email and tap the confirmation link, then sign in.', true);
+        olAuthTab('in'); btn.disabled = false; return;
+      }
     } else {
-      const { error } = await sb.auth.signInWithPassword({ email, password });
+      const { error } = await sb.auth.signInWithPassword(cred.creds);
       if (error) throw error;
     }
     olCloseAuth(); olById('auth-pass').value = '';
     await onlineEnterMode();
-  } catch (e) { olAuthMsg(olErr(e)); }
+  } catch (e) { olAuthMsg(olAuthHint(e, cred.kind)); }
   btn.disabled = false;
+}
+async function olVerifyOtp() {
+  const token = olById('auth-otp').value.trim(); if (!token || !olPendingPhone) { olAuthMsg('Type the SMS code.'); return; }
+  olAuthMsg('Checking…', true);
+  try {
+    const { error } = await sb.auth.verifyOtp({ phone: olPendingPhone, token, type: 'sms' }); if (error) throw error;
+    olPendingPhone = null; olById('auth-otp-wrap').style.display = 'none'; olCloseAuth(); olById('auth-pass').value = '';
+    await onlineEnterMode();
+  } catch (e) { olAuthMsg(olErr(e)); }
 }
 async function olForgotPassword() {
   if (!olInit()) return;
@@ -215,7 +265,8 @@ function openLobby() {
   onlineLobbyTimer = setInterval(() => { if (!document.hidden) olRefreshLobby(); }, 5000);
 }
 function closeLobby() { olById('lobby-modal').classList.remove('active'); olSyncMenuClass(); clearInterval(onlineLobbyTimer); onlineLobbyTimer = null; }
-async function olRefreshLobby() { olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadOpenRooms(); olRefreshInvites(); }
+async function olRefreshLobby() {
+  try { sb.rpc('cleanup_rooms').then(() => {}, () => {}); } catch (e) {} olLoadProfile().then(olRenderLobbyHeader).catch(() => {}); olLoadOpenRooms(); olRefreshInvites(); }
 function olRenderLobbyHeader() {
   if (!sbProfile) return;
   olById('ol-who').textContent = sbProfile.display_name;
@@ -395,7 +446,7 @@ function olUnsubscribe() {
   onlineChannel = null; clearInterval(onlinePollTimer); onlinePollTimer = null; clearTimeout(onlinePumpTimer);
   onlineConnected = false;
 }
-function olLeaveRoomView() { clearInterval(olClockWatch); olHideSetupUI(); olSetups = null; olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
+function olLeaveRoomView() { clearInterval(olClockWatch); clearInterval(olBeatTimer); olHideSetupUI(); olSetups = null; olIncomingRematch = null; olHideRematchBar(); olClearChatBadge(); olUnsubscribe(); onlineLoadToken++; onlineLoading = false; onlineRoom = null; onlineIncoming.clear(); olHideDrawBar(); olSetNames(null); olUpdatePanel(); }
 function onlineLeave() {                               // called by the game whenever the mode is switched / reset
   olLeaveRoomView(); closeLobby(); olCloseAuth(); olCloseFriends(); olClosePass(); olCloseNotifs(); olClosePView(); onlineReplaying = false;
 }
@@ -415,13 +466,16 @@ function olSubscribe(roomId) {
 function olStartPolling() {                            // safety net: phones suspend websockets when the screen sleeps
   clearInterval(onlinePollTimer);
   onlinePollTimer = setInterval(() => { if (!document.hidden && onlineRoom) olResync(); }, 5000);
+  clearInterval(olBeatTimer); olBeat();
+  olBeatTimer = setInterval(olBeat, 20000);
   clearInterval(olClockWatch);
   olClockWatch = setInterval(() => {                       // the clock must run whenever the game is on
     const r = onlineRoom;
     if (r && r.status === 'playing' && !r.setup_pending && !gameOver && r.minutes > 0 && !timerInterval) olSyncClocks();
   }, 1000);
 }
-let olClockWatch = null;
+let olClockWatch = null, olBeatTimer = null;
+function olBeat() { const r = onlineRoom; if (!r || document.hidden || !sb || (r.status !== 'waiting' && r.status !== 'playing')) return; sb.rpc('heartbeat', { p_room: r.id }).then(() => {}, () => {}); }
 async function olResync() {
   if (!onlineRoom || !sb || onlineLoading) return;
   olRefreshRoom();
@@ -435,7 +489,7 @@ async function olResync() {
     (data || []).forEach(x => olOnVoice(x, false));
   } catch (e) {}
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && onlineRoom) olResync(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && onlineRoom) { olResync(); olBeat(); } });
 window.addEventListener('online', () => { if (onlineRoom) olResync(); });
 
 async function olRefreshRoom() {
@@ -553,7 +607,15 @@ function olFinalizeWhenIdle() {
   if (onlineResultShown) return;
   if (onlineIncoming.size || isAnimating || onlineReplaying) { setTimeout(olFinalizeWhenIdle, 150); return; }
   const r = onlineRoom; if (!r) return;
-  if (r.status === 'cancelled') { appendChatMessage('System', 'This room was cancelled.'); onlineResultShown = true; return; }
+  if (r.status === 'cancelled') {
+    onlineResultShown = true; olHideSetupUI();
+    if (olCancelledByMe) { olCancelledByMe = false; return; }
+    const opp = r.guest_id ? olOpponentName() : null;
+    const msg = opp ? `${opp} has left the room, so the room was cancelled.` : 'This room was closed because nobody was online.';
+    appendChatMessage('System', msg); olNotify('game', 'Room cancelled', msg, 'lobby');
+    askConfirm('👋 Room cancelled', msg, 'OK • Lobby', () => switchModeInternal('online'), true);
+    return;
+  }
   if (r.status !== 'finished') return;
   onlineResultShown = true; gameOver = true; stopTimer(); hideKingEmergency(); hideCountingBadge();
   const reason = OL_REASON[r.result_reason] || 'Game over';
@@ -570,15 +632,15 @@ function olFinalizeWhenIdle() {
 function olSetNames(room) {
   const defaults = { w: 'WHITE • ស', b: 'BLACK • ខ្មៅ' };
   for (const c of ['w', 'b']) {
-    const span = document.querySelector('#timer-box-' + c + ' .side-header .side-name'); if (!span) continue;
+    const box = olById('timer-box-' + c), span = box && box.querySelector('.side-header .side-name'), av = box && box.querySelector('.side-av'); if (!span) continue;
     let uid = null, name = null;
     if (room) { if (room.host_color === c) { uid = room.host_id; name = room.host_name; } else { uid = room.guest_id; name = room.guest_name; } }
-    span.textContent = ''; span.onclick = null;
-    if (!uid || !name) { span.className = 'side-name'; span.textContent = defaults[c]; continue; }
-    span.className = 'side-name ol-who';
-    const av = olEl('span', 'ol-av'); olRenderAvatar(av, olAvatarCache[uid], name);
-    span.appendChild(av); span.appendChild(olEl('span', 'ol-nm', name));
-    span.onclick = () => olViewProfile(uid);
+    span.textContent = ''; span.onclick = null; if (av) { av.textContent = ''; av.onclick = null; }
+    if (!uid || !name) { box.classList.remove('has-av'); span.className = 'side-name'; span.textContent = defaults[c]; continue; }
+    box.classList.add('has-av'); span.className = 'side-name ol-who';
+    olRenderAvatar(av, olAvatarCache[uid], name);
+    span.appendChild(olEl('span', 'ol-nm', name));
+    span.onclick = av.onclick = () => olViewProfile(uid);
   }
 }
 /* ------------------------------------------------------------------ profile picture + name */
@@ -663,7 +725,7 @@ function olUpdatePanel() {
   if (!r) { olSetStatus('Signed in as ' + me, true); info.textContent = ''; show(dBtn, false); show(rBtn, false); show(iBtn, false); return; }
   show(iBtn, r.status === 'waiting');
   show(dBtn, r.status === 'playing' && !r.setup_pending); show(rBtn, r.status === 'playing' || r.status === 'waiting');
-  rBtn.textContent = r.status === 'waiting' ? '✕ Cancel room' : '🏳 Resign • ចុះចាញ់';
+  rBtn.textContent = (r.status === 'waiting' || r.setup_pending) ? '✕ Cancel room' : '🏳 Resign • ចុះចាញ់';
   if (r.status === 'waiting') { olSetStatus('Waiting for an opponent…', onlineConnected); info.textContent = `Room code: ${r.code}  •  ${olTimeLabel(r.minutes)}  •  you are ${olColorName(myRole)}`; }
   else if (r.status === 'playing' && r.setup_pending) {
     const mine = olReadyOf(r, myRole), theirs = olReadyOf(r, myRole === 'w' ? 'b' : 'w');
@@ -677,11 +739,12 @@ function olUpdatePanel() {
   } else { olSetStatus('Game finished', onlineConnected); info.textContent = `Room ${r.code}`; }
   if (r.draw_offer && r.draw_offer === myRole && r.status === 'playing') info.textContent += '  •  draw offered, waiting…';
 }
+let olCancelledByMe = false;
 async function olResign() {
   if (!onlineRoom) return;
-  const waiting = onlineRoom.status === 'waiting';
+  const waiting = onlineRoom.status === 'waiting' || !!onlineRoom.setup_pending;
   askConfirm(waiting ? 'Cancel this room?' : 'Resign this game?', waiting ? 'The room will be closed.' : 'You will lose this game.', waiting ? 'Yes, cancel' : 'Yes, resign', async () => {
-    try { const { data, error } = await sb.rpc('resign', { p_room: onlineRoom.id }); if (error) throw error; olApplyRoom(data); if (waiting) { olLeaveRoomView(); switchModeInternal('online'); } } catch (e) { olAlert(olErr(e)); }
+    try { if (waiting) olCancelledByMe = true; const { data, error } = await sb.rpc('resign', { p_room: onlineRoom.id }); if (error) throw error; olHideSetupUI(); olApplyRoom(data); if (waiting) { olLeaveRoomView(); switchModeInternal('online'); } } catch (e) { olCancelledByMe = false; olAlert(olErr(e)); }
   });
 }
 async function olOfferDraw() {
@@ -724,8 +787,9 @@ async function olInvite() {
 
 
 /* ------------------------------------------------------------------ generic confirm window */
-function askConfirm(title, text, okLabel, cb) {
+function askConfirm(title, text, okLabel, cb, single) {
   olById('ask-title').textContent = title; olById('ask-text').textContent = text;
+  const ac = olById('ask-cancel'); if (ac) ac.style.display = single ? 'none' : '';
   const ok = olById('ask-ok'); ok.textContent = okLabel || 'OK';
   ok.onclick = () => { olById('ask-modal').classList.remove('active'); if (cb) cb(); };
   olById('ask-modal').classList.add('active');
@@ -876,12 +940,16 @@ async function olSubmitSetup(pieces) {
   }
   setupSubmitting = false;
 }
+function olSetupCountOf(color) { const row = (olSetups || []).find(s => s.color === color); return row && Array.isArray(row.pieces) ? row.pieces.length : 16; }
+function olNameOfColor(c) { const r = onlineRoom; if (!r) return olColorName(c); return (r.host_color === c ? r.host_name : r.guest_name) || olColorName(c); }
 async function olOnSetupDone() {                                        // both ready: show the real starting position, clocks start
   olHideSetupUI();
   await olLoadSetups(onlineRoom.id);
   if (onlineApplied === 0) { olResetBoardForRoom(true); renderBoard(); updateUI(); }
   const custom = olSetups && olSetups.some(s => Array.isArray(s.pieces));
   appendChatMessage('System', custom ? 'Both players are ready — pieces were adjusted. Game on!' : 'Both players are ready — game on!');
+  const nw = olSetupCountOf('w'), nb = olSetupCountOf('b');
+  if (nw !== nb) { const first = nw > nb ? 'w' : 'b', fewer = first === 'w' ? 'b' : 'w'; appendChatMessage('System', `${olNameOfColor(first)} (${olColorName(first)}) moves first, because ${olNameOfColor(fewer)} (${olColorName(fewer)}) removed pieces.`); }
   olSyncClocks(); olUpdatePanel();
   try { playSound('move'); } catch (e) {}
 }
@@ -1038,9 +1106,10 @@ function olUserSub() {
   if (!sb || !sbUser || olUserChannel) return;
   olUserChannel = sb.channel('user-' + sbUser.id)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'invites', filter: 'to_user=eq.' + sbUser.id }, () => olRefreshInvites())
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'direct_messages', filter: 'to_user=eq.' + sbUser.id }, p => olOnDM(p.new))
     .subscribe();
   clearInterval(olUserTimer); let tk = 0; olUserTimer = setInterval(() => { if (document.hidden) return; olRefreshInvites(); if ((tk++ % 2) === 0) olPollFriends(); }, 6000);
-  olRefreshInvites(); olPollFriends();
+  olRefreshInvites(); olPollFriends(); olLoadUnreadDMs();
 }
 function olUserUnsub() {
   if (olUserChannel && sb) { try { sb.removeChannel(olUserChannel); } catch (e) {} }
@@ -1111,7 +1180,7 @@ function olPresenceUnsub() { if (olPresence && sb) { try { sb.removeChannel(olPr
 const OL_NKEY = 'khmerNotifs';
 let olNotifs = []; try { olNotifs = JSON.parse(localStorage.getItem(OL_NKEY) || '[]'); } catch (e) { olNotifs = []; }
 let olSeenReq = null;
-const OL_NICON = { chat: '💬', voice: '🎤', invite: '🎮', friend: '👥', rematch: '🔁', draw: '🤝', turn: '⏳', game: '🎲' };
+const OL_NICON = { message: '✉️', chat: '💬', voice: '🎤', invite: '🎮', friend: '👥', rematch: '🔁', draw: '🤝', turn: '⏳', game: '🎲' };
 function olSaveNotifs() { try { localStorage.setItem(OL_NKEY, JSON.stringify(olNotifs.slice(0, 50))); } catch (e) {} }
 function olNotify(kind, title, body, action) {
   const n = { id: Date.now() + Math.random(), ts: Date.now(), kind, title, body: String(body || '').slice(0, 120), action: action || null, read: false };
@@ -1153,6 +1222,7 @@ function olRenderNotifs() {
 }
 function olNotifTap(n) {
   olCloseNotifs(); const a = n.action || '';
+  if (a.startsWith('dm:')) { const [, id, ...nm] = a.split(':'); olOpenDM(id, nm.join(':')); return; }
   if (a === 'chat') { const dd = olById('chat-dropdown'); if (dd) dd.classList.add('active'); olClearChatBadge(); }
   else if (a.startsWith('invite:')) olInviteJoin(a.slice(7));
   else if (a === 'friends') olOpenFriends(false);
@@ -1219,7 +1289,7 @@ async function olViewProfile(uid) {
     else {
       const h = await olH2H(uid); if (h) body.appendChild(olEl('div', 'pv-h2h', `You vs ${data.display_name}: ${h.w} – ${h.l}` + (h.d ? ` (${h.d} draw${h.d > 1 ? 's' : ''})` : '')));
       const rel = olFriends.find(f => f.id === uid);
-      if (rel && rel.state === 'friend') act.appendChild(olEl('div', 'pv-status', '✓ Friends'));
+      if (rel && rel.state === 'friend') { act.appendChild(olEl('div', 'pv-status', '✓ Friends')); act.appendChild(olBtn('✉️ Leave a message', 'btn btn-primary', () => { olClosePView(); olOpenDM(uid, data.display_name); })); }
       else if (rel && rel.state === 'outgoing') act.appendChild(olEl('div', 'pv-status', 'Friend request sent'));
       else if (rel && rel.state === 'incoming') act.appendChild(olBtn('Accept friend request', 'btn btn-online', async () => { await olFriendRespond(uid, true); olViewProfile(uid); }));
       else act.appendChild(olBtn('➕ Add friend', 'btn btn-online', async () => {
@@ -1320,6 +1390,62 @@ async function olVoicePlay(id, btn) {
     a.onended = () => { olVoiceAudio = null; olVoiceReset(); };
     await a.play();
   } catch (e) { olVoiceReset(); btn.textContent = btn.dataset.label; olAlert('This device cannot play this voice message.'); }
+}
+
+
+/* ------------------------------------------------------------------ messages to a friend ("leave a message") */
+let olDmWith = null, olDmName = '', olSeenDm = new Set();
+function olTimeHM(ts) { const d = new Date(ts); return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
+function olDmBubble(m) {
+  const mine = sbUser && m.from_user === sbUser.id, b = olEl('div', 'dm-b ' + (mine ? 'me' : 'them'), m.body);
+  b.appendChild(olEl('small', null, olTimeHM(m.created_at || Date.now()))); return b;
+}
+async function olOpenDM(uid, name) {
+  if (!sb || !sbUser) { olOpenAuth(); return; }
+  olDmWith = uid; olDmName = name || '';
+  olById('dm-title').textContent = '✉️ ' + (name || ''); olById('dm-msg').textContent = ''; olById('dm-input').value = '';
+  const box = olById('dm-thread'); box.textContent = 'Loading…';
+  olById('dm-modal').classList.add('active'); olSyncMenuClass();
+  try {
+    const { data, error } = await sb.rpc('dm_thread', { p_other: uid, p_limit: 40 }); if (error) throw error;
+    box.textContent = '';
+    if (!data.length) box.appendChild(olEl('div', 'ol-empty', 'No messages yet. Write the first one!'));
+    data.forEach(m => box.appendChild(olDmBubble(m)));
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { box.textContent = ''; olById('dm-msg').textContent = /dm_thread|schema cache/i.test((e && e.message) || '') ? 'Messages are not set up yet. Run update_v4.sql in Supabase.' : olErr(e); }
+}
+function olCloseDM() { olDmWith = null; const m = olById('dm-modal'); if (m) m.classList.remove('active'); olSyncMenuClass(); }
+async function olDMSend() {
+  const inp = olById('dm-input'), body = inp.value.trim(); if (!body || !olDmWith) return;
+  inp.value = ''; olById('dm-msg').textContent = '';
+  try {
+    const { data, error } = await sb.rpc('send_dm', { p_to: olDmWith, p_body: body }); if (error) throw error;
+    const box = olById('dm-thread'); if (box.querySelector('.ol-empty')) box.textContent = '';
+    box.appendChild(olDmBubble({ from_user: sbUser.id, body, created_at: Date.now() })); box.scrollTop = box.scrollHeight;
+  } catch (e) { inp.value = body; olById('dm-msg').textContent = olErr(e); }
+}
+async function olNameFor(uid) {
+  const f = olFriends.find(x => x.id === uid); if (f) return f.name;
+  try { const { data } = await sb.from('profiles').select('display_name').eq('id', uid).maybeSingle(); if (data) return data.display_name; } catch (e) {}
+  return 'A friend';
+}
+async function olOnDM(m) {
+  if (!m || olSeenDm.has(m.id)) return; olSeenDm.add(m.id);
+  if (olDmWith === m.from_user && olById('dm-modal').classList.contains('active')) {
+    const box = olById('dm-thread'); if (box.querySelector('.ol-empty')) box.textContent = '';
+    box.appendChild(olDmBubble(m)); box.scrollTop = box.scrollHeight;
+    try { sb.rpc('dm_thread', { p_other: m.from_user, p_limit: 1 }).then(() => {}, () => {}); } catch (e) {}
+    return;
+  }
+  const name = await olNameFor(m.from_user);
+  olNotify('message', name, m.body, 'dm:' + m.from_user + ':' + name);
+  olToast(`✉️ ${name}: ${String(m.body).slice(0, 60)}`, true);
+}
+async function olLoadUnreadDMs() {
+  try {
+    const { data, error } = await sb.rpc('my_unread_dms'); if (error || !data) return;
+    data.forEach(x => { const key = x.from_id + '|' + x.last_at; if (olSeenDm.has(key)) return; olSeenDm.add(key); olNotify('message', `${x.from_name}${x.count > 1 ? ' (' + x.count + ')' : ''}`, x.last_body, 'dm:' + x.from_id + ':' + x.from_name); });
+  } catch (e) {}
 }
 
 /* ------------------------------------------------------------------ signed-in at start-up (so notifications work in every mode) */
