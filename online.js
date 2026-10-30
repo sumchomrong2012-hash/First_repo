@@ -274,9 +274,21 @@ function olRenderLobbyHeader() {
   const idb = olById('ol-id-box'); if (idb) { idb.style.cursor = 'pointer'; idb.onclick = () => olViewProfile(sbUser.id); }
   olById('ol-stats').textContent = `🏆 ${sbProfile.wins} wins • ${sbProfile.losses} losses • ${sbProfile.draws} draws`;
 }
+const OL_TURNS = [[0, 'No limit'], [30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [180, '3 minutes'], [300, '5 minutes']];
 function olFillCreateForm() {
   const t = olById('ol-new-time'); if (t.options.length) return;
   OL_TIMES.forEach(([m, l]) => { const o = olEl('option', null, l); o.value = m; if (m === 20) o.selected = true; t.appendChild(o); });
+  const u = olById('ol-new-turn'); if (u && !u.options.length) OL_TURNS.forEach(([s, l]) => { const o = olEl('option', null, l); o.value = s; if (s === 120) o.selected = true; u.appendChild(o); });
+}
+/* create_room, with the "time per move" only when it is wanted; older databases (without update_v5.sql) still work */
+async function olCreateRoomRpc(args, turnSec) {
+  const a = Object.assign({}, args); if (turnSec > 0) a.p_turn_seconds = turnSec;
+  let res = await sb.rpc('create_room', a);
+  if (res.error && a.p_turn_seconds && /p_turn_seconds|schema cache|Could not find/i.test(res.error.message || '')) {
+    delete a.p_turn_seconds; res = await sb.rpc('create_room', a);
+    if (!res.error) olToast('⚠️ The time per move needs update_v5.sql in Supabase — the room was created without it.', true);
+  }
+  return res;
 }
 async function olCreateRoom() {
   const btn = olById('ol-create-btn'); btn.disabled = true;
@@ -288,7 +300,7 @@ async function olCreateRoom() {
     };
     const pass = olById('ol-new-pass').value.trim();
     if (pass) { if (pass.length < 2) throw new Error('bad_passkey'); args.p_passkey = pass; }
-    const { data, error } = await sb.rpc('create_room', args);
+    const { data, error } = await olCreateRoomRpc(args, Number(olById('ol-new-turn').value) || 0);
     if (error) throw error;
     olById('ol-new-pass').value = '';
     await olEnterRoom(data);
@@ -380,9 +392,9 @@ function olResetBoardForRoom(keepChat) {
   selectedSquare = null; legalMovesCache = []; lastMove = null; historyStack = []; redoStack = [];
   gameOver = false; isAnimating = false; aiSide = 'off';
   onlineApplied = 0; onlineMoveTimes = []; onlineIncoming.clear(); onlineResultShown = false;
-  baseTurnControl = Infinity;
+  baseTurnControl = onlineRoom.turn_seconds > 0 ? onlineRoom.turn_seconds : Infinity;
   baseMatchControl = onlineRoom.minutes > 0 ? onlineRoom.minutes * 60 : Infinity;
-  whiteMatchTime = blackMatchTime = baseMatchControl; whiteTurnTime = blackTurnTime = Infinity;
+  whiteMatchTime = blackMatchTime = baseMatchControl; whiteTurnTime = blackTurnTime = baseTurnControl;
   olById('result-modal').classList.remove('active');
   if (!keepChat) { olById('chat-messages').textContent = ''; onlineLastMsgId = 0; }
 }
@@ -471,7 +483,7 @@ function olStartPolling() {                            // safety net: phones sus
   clearInterval(olClockWatch);
   olClockWatch = setInterval(() => {                       // the clock must run whenever the game is on
     const r = onlineRoom;
-    if (r && r.status === 'playing' && !r.setup_pending && !gameOver && r.minutes > 0 && !timerInterval) olSyncClocks();
+    if (r && r.status === 'playing' && !r.setup_pending && !gameOver && (r.minutes > 0 || r.turn_seconds > 0) && !timerInterval) olSyncClocks();
   }, 1000);
 }
 let olClockWatch = null, olBeatTimer = null;
@@ -590,14 +602,21 @@ function olApplyRoom(room, silent) {
 function olOpponentName() { const r = onlineRoom; if (!r) return 'Opponent'; return (r.host_id === sbUser.id ? r.guest_name : r.host_name) || 'Opponent'; }
 function olSyncClocks() {
   const r = onlineRoom; if (!r) return;
-  if (!(r.minutes > 0)) { baseMatchControl = Infinity; whiteMatchTime = blackMatchTime = Infinity; updateTimerDisplay(); updateTimerActiveBox(); return; }
-  const total = r.minutes * 60; baseMatchControl = total;
-  if (r.status === 'waiting' || !r.started_at || r.setup_pending) { whiteMatchTime = blackMatchTime = total; updateTimerDisplay(); updateTimerActiveBox(); return; }
+  const ts = r.turn_seconds > 0 ? r.turn_seconds : 0, hasMatch = r.minutes > 0;
+  baseMatchControl = hasMatch ? r.minutes * 60 : Infinity; baseTurnControl = ts > 0 ? ts : Infinity;
+  if (!hasMatch && !ts) { whiteMatchTime = blackMatchTime = Infinity; whiteTurnTime = blackTurnTime = Infinity; updateTimerDisplay(); updateTimerActiveBox(); return; }
+  if (r.status === 'waiting' || !r.started_at || r.setup_pending) { whiteMatchTime = blackMatchTime = baseMatchControl; whiteTurnTime = blackTurnTime = baseTurnControl; updateTimerDisplay(); updateTimerActiveBox(); return; }
   if (onlineMoveTimes.length !== onlineApplied) return;          // a local move is still being confirmed — keep ticking as is
   const used = { w: 0, b: 0 }; let prev = Date.parse(r.started_at);
   for (const mt of onlineMoveTimes) { if (!mt) continue; used[mt.by] += Math.max(0, (mt.t - prev) / 1000); prev = mt.t; }
-  if (r.status === 'playing') used[turn] += Math.max(0, (Date.now() + onlineServerOffset - prev) / 1000);
-  whiteMatchTime = Math.max(0, total - used.w); blackMatchTime = Math.max(0, total - used.b);
+  const nowS = Date.now() + onlineServerOffset, sinceLast = Math.max(0, (nowS - prev) / 1000);
+  if (r.status === 'playing') used[turn] += sinceLast;
+  whiteMatchTime = hasMatch ? Math.max(0, baseMatchControl - used.w) : Infinity; blackMatchTime = hasMatch ? Math.max(0, baseMatchControl - used.b) : Infinity;
+  if (ts > 0) {                                                  // time per move: the player to move has what is left of it
+    const left = Math.max(0, ts - sinceLast);
+    if (r.status === 'playing') { if (turn === 'w') { whiteTurnTime = left; blackTurnTime = ts; } else { blackTurnTime = left; whiteTurnTime = ts; } }
+    else whiteTurnTime = blackTurnTime = ts;
+  } else whiteTurnTime = blackTurnTime = Infinity;
   updateTimerDisplay(); updateTimerActiveBox();
   if (r.status === 'playing' && !r.setup_pending && !gameOver) { if (!timerInterval) startTimer(); else lastTickMs = performance.now(); }
   else stopTimer();
@@ -886,7 +905,7 @@ async function olRematch() {
       olById('result-modal').classList.remove('active'); await olJoinByCode(code); return;
     }
     const opp = olOpponentName();
-    const { data, error } = await sb.rpc('create_room', { p_color: myRole === 'w' ? 'b' : 'w', p_minutes: old.minutes, p_first_turn: old.first_turn, p_public: false });
+    const { data, error } = await olCreateRoomRpc({ p_color: myRole === 'w' ? 'b' : 'w', p_minutes: old.minutes, p_first_turn: old.first_turn, p_public: false }, old.turn_seconds || 0);
     if (error) throw error;
     await sb.rpc('send_message', { p_room: old.id, p_body: OL_REMATCH + data.code });
     olById('result-modal').classList.remove('active');
@@ -1414,7 +1433,7 @@ async function olOpenDM(uid, name) {
     box.scrollTop = box.scrollHeight;
   } catch (e) { box.textContent = ''; olById('dm-msg').textContent = /dm_thread|schema cache/i.test((e && e.message) || '') ? 'Messages are not set up yet. Run update_v4.sql in Supabase.' : olErr(e); }
 }
-function olCloseDM() { olDmWith = null; const m = olById('dm-modal'); if (m) m.classList.remove('active'); olSyncMenuClass(); }
+function olCloseDM() { olDmWith = null; const m = olById('dm-modal'); if (m) m.classList.remove('active'); olSyncMenuClass(); olRefreshInboxBadge(); const ip = olById('chat-inbox-pane'); if (ip && ip.style.display !== 'none') olLoadInbox(); }
 async function olDMSend() {
   const inp = olById('dm-input'), body = inp.value.trim(); if (!body || !olDmWith) return;
   inp.value = ''; olById('dm-msg').textContent = '';
@@ -1438,14 +1457,52 @@ async function olOnDM(m) {
     return;
   }
   const name = await olNameFor(m.from_user);
+  olRefreshInboxBadge(); { const ip = olById('chat-inbox-pane'); if (ip && ip.style.display !== 'none') olLoadInbox(); }
   olNotify('message', name, m.body, 'dm:' + m.from_user + ':' + name);
   olToast(`✉️ ${name}: ${String(m.body).slice(0, 60)}`, true);
 }
 async function olLoadUnreadDMs() {
+  olRefreshInboxBadge();
   try {
     const { data, error } = await sb.rpc('my_unread_dms'); if (error || !data) return;
     data.forEach(x => { const key = x.from_id + '|' + x.last_at; if (olSeenDm.has(key)) return; olSeenDm.add(key); olNotify('message', `${x.from_name}${x.count > 1 ? ' (' + x.count + ')' : ''}`, x.last_body, 'dm:' + x.from_id + ':' + x.from_name); });
   } catch (e) {}
+}
+
+
+/* ------------------------------------------------------------------ messages inbox (tab in the message panel) */
+function olSetInboxBadge(n) { const b = olById('ct-badge'); if (b) { b.textContent = n > 9 ? '9+' : String(n); b.classList.toggle('show', n > 0); } }
+async function olRefreshInboxBadge() {
+  if (!sb || !sbUser) return;
+  try { const { data } = await sb.rpc('my_unread_dms'); olSetInboxBadge((data || []).reduce((n, x) => n + (x.count || 0), 0)); } catch (e) {}
+}
+function olChatTab(tab) {
+  const room = tab === 'room';
+  olById('chat-room-pane').style.display = room ? '' : 'none'; olById('chat-inbox-pane').style.display = room ? 'none' : 'block';
+  olById('ct-room').classList.toggle('active', room); olById('ct-inbox').classList.toggle('active', !room);
+  if (!room) olLoadInbox();
+}
+async function olLoadInbox() {
+  const box = olById('inbox-list'); if (!box) return;
+  if (!sb || !sbUser) { box.textContent = ''; box.appendChild(olEl('div', 'ol-empty', 'Sign in (Online mode) to see your messages.')); return; }
+  try {
+    const { data, error } = await sb.rpc('my_conversations'); if (error) throw error;
+    await olLoadAvatarsFor((data || []).map(c => c.other_id));
+    box.textContent = '';
+    if (!data.length) { box.appendChild(olEl('div', 'ol-empty', 'No messages yet.')); olSetInboxBadge(0); return; }
+    data.forEach(c => {
+      const row = olEl('div', 'ol-row' + (c.unread ? ' unread' : '')), av = olEl('span', 'ol-av mid'); olRenderAvatar(av, olAvatarCache[c.other_id], c.other_name);
+      const meta = olEl('div', 'ol-meta'); meta.appendChild(olEl('div', 'ol-l1', c.other_name));
+      meta.appendChild(olEl('div', 'inbox-prev', (c.last_from_me ? '↪ ' : '') + c.last_body));
+      row.appendChild(av); row.appendChild(meta);
+      const right = olEl('div', 'ol-actions'); right.style.flexDirection = 'column'; right.style.alignItems = 'flex-end';
+      right.appendChild(olEl('span', 'nt-time', olAgo(Date.parse(c.last_at))));
+      if (c.unread) { const bd = olEl('span', 'chat-badge inline show', c.unread > 9 ? '9+' : String(c.unread)); bd.style.margin = '0'; right.appendChild(bd); }
+      row.appendChild(right); row.style.cursor = 'pointer'; row.addEventListener('click', () => olOpenDM(c.other_id, c.other_name));
+      box.appendChild(row);
+    });
+    olSetInboxBadge(data.reduce((n, c) => n + (c.unread || 0), 0));
+  } catch (e) { box.textContent = ''; box.appendChild(olEl('div', 'ol-empty', /my_conversations|schema cache/i.test((e && e.message) || '') ? 'The inbox is not set up yet. Run update_v5.sql in Supabase.' : olErr(e))); }
 }
 
 /* ------------------------------------------------------------------ signed-in at start-up (so notifications work in every mode) */

@@ -157,6 +157,15 @@
   E('Clear the board', 'សម្អាតក្តារ'); E('Emoji', 'សញ្ញាអារម្មណ៍'); E('Friends', 'មិត្តភក្តិ'); E('Load all pieces on the board', 'ដាក់កូនអុកទាំងអស់លើក្តារ'); E('My profile', 'គណនីរបស់ខ្ញុំ'); E('Notifications', 'ការជូនដំណឹង');
   E('Reset trays', 'កំណត់ថាសឡើងវិញ'); E('Rotate Board', 'បង្វិលក្តារ'); E('Toggle 3D Board', 'ប្តូរក្តារ 3D'); E('Voice message', 'សារជាសំឡេង'); E('Change name', 'ប្តូរឈ្មោះ'); E('Chat', 'ជជែក'); E('Settings', 'ការកំណត់');
 
+
+  /* ---------- round 13 ---------- */
+  E('Time per move', 'ពេលក្នុងមួយជំហាន'); E('No limit', 'គ្មានកំណត់'); E('💬 Room chat', '💬 ជជែកក្នុងបន្ទប់'); E('✉️ Messages', '✉️ សារ'); E('No messages yet.', 'មិនទាន់មានសារទេ។');
+  E('Sign in (Online mode) to see your messages.', 'សូមចូលគណនី (របៀបអនឡាញ) ដើម្បីមើលសាររបស់អ្នក។');
+  E("Friends who leave you a message appear here. Open a friend's profile and tap ✉️ Leave a message to write to them.", 'មិត្តដែលទុកសារឱ្យអ្នកនឹងបង្ហាញនៅទីនេះ។ បើកប្រវត្តិរូបមិត្ត ហើយចុច ✉️ ទុកសារ ដើម្បីសរសេរទៅគេ។');
+  R('📊 Bare king — {c} must checkmate within limit {t} (Count: {a} / {b}).', '📊 ស្តេចឯកា — {c} ត្រូវម៉ាត់ក្នុងកំណត់ {t} (រាប់៖ {a} / {b})។');
+  R('📊 All pawns promoted — counting renewed: {c} must checkmate within limit {t} (Count: {a} / {b}).', '📊 ត្រីទាំងអស់បានឡើងថ្នាក់ — រាប់ឡើងវិញ៖ {c} ត្រូវម៉ាត់ក្នុងកំណត់ {t} (រាប់៖ {a} / {b})។');
+  R("📊 Counting started — {c} has up to {m} moves before it's a draw.", '📊 ចាប់ផ្តើមរាប់ — {c} មានរហូតដល់ {m} ជំហាន មុននឹងស្មើ។');
+
   /* ---------- engine ---------- */
   var cache = {}, cacheN = 0, LETTER = /[A-Za-z\u1780-\u17FF]/;
   function lookup(src, depth) {
@@ -182,7 +191,7 @@
   var observer = null, applying = false;
   function skipNode(node) {
     var p = node.parentNode; if (!p || !p.closest) return false;
-    if (p.closest('#dm-thread')) return true;
+    if (p.closest('#dm-thread') || (p.classList && p.classList.contains('inbox-prev'))) return true;
     if (p.closest('#chat-messages')) {
       if (p.tagName === 'B') return false;
       var prev = node.previousSibling; while (prev && prev.nodeType === 3 && !/\S/.test(prev.nodeValue)) prev = prev.previousSibling;
