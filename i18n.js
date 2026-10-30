@@ -166,6 +166,8 @@
   R('📊 All pawns promoted — counting renewed: {c} must checkmate within limit {t} (Count: {a} / {b}).', '📊 ត្រីទាំងអស់បានឡើងថ្នាក់ — រាប់ឡើងវិញ៖ {c} ត្រូវម៉ាត់ក្នុងកំណត់ {t} (រាប់៖ {a} / {b})។');
   R("📊 Counting started — {c} has up to {m} moves before it's a draw.", '📊 ចាប់ផ្តើមរាប់ — {c} មានរហូតដល់ {m} ជំហាន មុននឹងស្មើ។');
 
+  E('🔒 Passkey (if the room has one)', '🔒 លេខសម្ងាត់ (បើបន្ទប់មាន)');
+
   /* ---------- engine ---------- */
   var cache = {}, cacheN = 0, LETTER = /[A-Za-z\u1780-\u17FF]/;
   function lookup(src, depth) {

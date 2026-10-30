@@ -309,7 +309,7 @@ async function olCreateRoom() {
 }
 let olPassCode = null;
 function olJoinMsg(text, good) { const m = olById('ol-join-msg'); if (m) { m.textContent = text; m.style.color = good ? '#6ee7b7' : '#fca5a5'; } }
-async function olJoinByCode(code, passkey) {
+async function olJoinByCode(code, passkey, fromBox) {
   code = (code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!code) { olJoinMsg('Type the 6-letter room code first.'); return; }
   if (!sb || !sbUser) { onlinePendingJoin = code; olOpenAuth(); return; }
@@ -318,12 +318,12 @@ async function olJoinByCode(code, passkey) {
     const { data, error } = await sb.rpc('join_room', passkey ? { p_code: code, p_passkey: passkey } : { p_code: code });
     if (error) throw error;
     olJoinMsg(''); olClosePass();
-    const inp = olById('ol-join-code'); if (inp) inp.value = '';
+    const inp = olById('ol-join-code'); if (inp) inp.value = ''; const ip = olById('ol-join-pass'); if (ip) ip.value = '';
     await olEnterRoom(data);
   } catch (e) {
     const m = (e && e.message) || '';
     if (/passkey_required/.test(m)) { olJoinMsg(''); olAskPasskey(code, false); return; }
-    if (/wrong_passkey/.test(m)) { olJoinMsg(''); olAskPasskey(code, true); return; }
+    if (/wrong_passkey/.test(m)) { if (fromBox) { olJoinMsg('Wrong passkey.'); return; } olJoinMsg(''); olAskPasskey(code, true); return; }
     olJoinMsg('Could not join: ' + olErr(e)); olAlert(olErr(e));
     if (!olById('lobby-modal').classList.contains('active')) openLobby();
   }
@@ -341,7 +341,7 @@ function olPassSubmit() {
   if (!v) { olById('pass-msg').textContent = 'Type the passkey.'; return; }
   olJoinByCode(olPassCode, v);
 }
-function olJoinFromInput() { olJoinByCode(olById('ol-join-code').value); }
+function olJoinFromInput() { olJoinByCode(olById('ol-join-code').value, olById('ol-join-pass').value.trim() || undefined, true); }
 function olRoomRow(r, mode) {
   const row = olEl('div', 'ol-row'); const meta = olEl('div', 'ol-meta');
   const mine = mode === 'mine';
@@ -1521,6 +1521,7 @@ window.addEventListener('DOMContentLoaded', () => {
   olFillCreateForm(); olAuthTab('in');
   ['auth-email', 'auth-pass', 'auth-name'].forEach(id => olById(id).addEventListener('keydown', e => { if (e.key === 'Enter') olAuthSubmit(); }));
   olById('ol-join-code').addEventListener('keydown', e => { if (e.key === 'Enter') olJoinFromInput(); });
+  olById('ol-join-pass').addEventListener('keydown', e => { if (e.key === 'Enter') olJoinFromInput(); });
   const code = new URLSearchParams(location.search).get('join');
   if (code) {
     onlinePendingJoin = code.trim().toUpperCase();
