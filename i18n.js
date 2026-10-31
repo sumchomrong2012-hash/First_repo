@@ -82,11 +82,10 @@
   /* ---------- lobby / rooms ---------- */
   E('CREATE A ROOM • បង្កើតបន្ទប់', 'បង្កើតបន្ទប់', 'CREATE A ROOM'); E('Create room • បង្កើត', 'បង្កើតបន្ទប់', 'Create room'); E('JOIN WITH A CODE • ចូលបន្ទប់', 'ចូលដោយលេខកូដ', 'JOIN WITH A CODE'); E('Join • ចូល', 'ចូល', 'Join');
   E('I play as', 'ខ្ញុំលេងជា'); E('Clock (per player)', 'នាឡិកា (ម្នាក់ៗ)'); E('Who moves first', 'អ្នកណាដើរមុន'); E('First mover', 'អ្នកដើរមុន'); E('First Turn', 'វេនដំបូង'); E('Show in public lobby', 'បង្ហាញក្នុងបន្ទប់សាធារណៈ');
-  E('🔒 Passkey (optional) • លេខសម្ងាត់ — leave empty for no passkey', '🔒 លេខសម្ងាត់បន្ទប់ (ជម្រើស) — ទុកទទេបើមិនត្រូវការ', '🔒 Passkey (optional) — leave empty for no passkey');
   E('OPEN PUBLIC ROOMS', 'បន្ទប់សាធារណៈដែលបើក'); E('No open public rooms right now.', 'មិនមានបន្ទប់សាធារណៈទេឥឡូវនេះ។'); E('🎮 INVITATIONS', '🎮 ការអញ្ជើញ'); R('Version {n}', 'កំណែ {n}');
   E('Type the 6-letter room code first.', 'សូមវាយលេខកូដបន្ទប់ ៦ តួអក្សរជាមុន។'); R('Joining room {c}…', 'កំពុងចូលបន្ទប់ {c}…'); R('Could not join: {m}', 'មិនអាចចូលបាន៖ {m}');
-  E('Room not found — check the code.', 'រកមិនឃើញបន្ទប់ — សូមពិនិត្យលេខកូដ។'); E('That room already has two players.', 'បន្ទប់នោះមានអ្នកលេងពីរនាក់ហើយ។'); E('This room needs a passkey.', 'បន្ទប់នេះត្រូវការលេខសម្ងាត់។'); E('Wrong passkey.', 'លេខសម្ងាត់មិនត្រឹមត្រូវ។');
-  E('🔒 Passkey • លេខសម្ងាត់', '🔒 លេខសម្ងាត់បន្ទប់', '🔒 Passkey'); R('Room {c} is locked. Ask the host for the passkey.', 'បន្ទប់ {c} ត្រូវបានចាក់សោ។ សូមសុំលេខសម្ងាត់ពីម្ចាស់បន្ទប់។'); E('Wrong passkey — try again.', 'លេខសម្ងាត់មិនត្រឹមត្រូវ — សូមព្យាយាមម្តងទៀត។'); E('Type the passkey.', 'សូមវាយលេខសម្ងាត់។');
+  E('Room not found — check the code.', 'រកមិនឃើញបន្ទប់ — សូមពិនិត្យលេខកូដ។'); E('That room already has two players.', 'បន្ទប់នោះមានអ្នកលេងពីរនាក់ហើយ។'); E('This room needs a passcode.', 'បន្ទប់នេះត្រូវការលេខសម្ងាត់។'); E('Wrong passcode.', 'លេខសម្ងាត់មិនត្រឹមត្រូវ។');
+  E('🔒 Passcode • លេខសម្ងាត់', '🔒 លេខសម្ងាត់បន្ទប់', '🔒 Passcode'); R('Room {c} is locked. Ask the host for the passcode.', 'បន្ទប់ {c} ត្រូវបានចាក់សោ។ សូមសុំលេខសម្ងាត់ពីម្ចាស់បន្ទប់។'); E('Wrong passcode — try again.', 'លេខសម្ងាត់មិនត្រឹមត្រូវ — សូមព្យាយាមម្តងទៀត។'); E('Type the passcode.', 'សូមវាយលេខសម្ងាត់។');
   R('Room code: {c} • {m} • you are {x}', 'លេខកូដបន្ទប់៖ {c}  •  {m}  •  អ្នកជា {x}'); R('Room {c} • {m}', 'បន្ទប់ {c} • {m}'); E('Waiting for an opponent…', 'កំពុងរង់ចាំគូប្រកួត…'); E('Waiting for an opponent…', 'កំពុងរង់ចាំគូប្រកួត…');
   E('Invite friend', 'អញ្ជើញមិត្ត'); E('🤝 Offer draw • សុំស្មើ', '🤝 សុំស្មើ', '🤝 Offer draw'); E('🏳 Resign • ចុះចាញ់', '🏳 ចុះចាញ់', '🏳 Resign'); E('✕ Cancel room', '✕ បោះបង់បន្ទប់'); E('Lobby • បន្ទប់', 'បន្ទប់', 'Lobby'); E('Lobby', 'បន្ទប់');
   E('ONLINE MULTIPLAYER • អនឡាញ', 'ហ្គេមអនឡាញ', 'ONLINE MULTIPLAYER'); E('✕ Close • បិទ', '✕ បិទ', '✕ Close'); E('Close • បិទ', 'បិទ', 'Close');
@@ -145,7 +144,7 @@
 
   /* ---------- more texts ---------- */
   R('Version {n}', 'កំណែ {n}'); R('🏆 {w} wins • {l} losses • {d} draws', '🏆 ឈ្នះ {w} • ចាញ់ {l} • ស្មើ {d}');
-  E('e.g. 4821', 'ឧ. 4821'); E('Passkey', 'លេខសម្ងាត់'); E('now', 'ឥឡូវនេះ'); R('{n} min ago', '{n} នាទីមុន'); R('{n} h ago', '{n} ម៉ោងមុន'); R('{n} d ago', '{n} ថ្ងៃមុន');
+  E('e.g. 4821', 'ឧ. 4821'); E('Passcode', 'លេខសម្ងាត់'); E('now', 'ឥឡូវនេះ'); R('{n} min ago', '{n} នាទីមុន'); R('{n} h ago', '{n} ម៉ោងមុន'); R('{n} d ago', '{n} ថ្ងៃមុន');
   R('AI plays {c} • Level: {l}', 'AI លេង {c} • កម្រិត៖ {l}'); E('easy', 'ងាយ'); E('medium', 'មធ្យម'); E('hard', 'ពិបាក'); E('master', 'អ្នកជំនាញ'); E('grandmaster', 'ម្ចាស់ជំនាញ'); E('legend', 'ព្រឹទ្ធាចារ្យ');
   R('AI ({l})', 'AI ({l})'); R('AI ({l}) thinking…', 'AI ({l}) កំពុងគិត…');
   E('Accept & Start', 'ទទួលយក & ចាប់ផ្តើម'); E('Ready — Send Setup', 'រួចរាល់ — ផ្ញើការរៀបចំ'); E('Active Side', 'ខាងដែលកំពុងដើរ'); E('Attacker must mate or draw', 'អ្នកវាយប្រហារត្រូវម៉ាត់ ឬស្មើ');
@@ -166,7 +165,11 @@
   R('📊 All pawns promoted — counting renewed: {c} must checkmate within limit {t} (Count: {a} / {b}).', '📊 ត្រីទាំងអស់បានឡើងថ្នាក់ — រាប់ឡើងវិញ៖ {c} ត្រូវម៉ាត់ក្នុងកំណត់ {t} (រាប់៖ {a} / {b})។');
   R("📊 Counting started — {c} has up to {m} moves before it's a draw.", '📊 ចាប់ផ្តើមរាប់ — {c} មានរហូតដល់ {m} ជំហាន មុននឹងស្មើ។');
 
-  E('🔒 Passkey (if the room has one)', '🔒 លេខសម្ងាត់ (បើបន្ទប់មាន)');
+
+
+  /* ---------- round 14: passcode pop-up ---------- */
+  E('Do you want a passcode for this room? Players will need it to join.', 'តើអ្នកចង់ដាក់លេខសម្ងាត់សម្រាប់បន្ទប់នេះទេ? អ្នកលេងត្រូវការវាដើម្បីចូល។');
+  E('No passcode', 'គ្មានលេខសម្ងាត់'); E('Yes, enter passcode', 'បាទ/ចាស បញ្ចូលលេខសម្ងាត់'); E('Passcode (2–20 characters)', 'លេខសម្ងាត់ (២–២០ តួអក្សរ)'); E('Passcode must be 2–20 characters.', 'លេខសម្ងាត់ត្រូវមាន ២–២០ តួអក្សរ។'); E('Create room', 'បង្កើតបន្ទប់');
 
   /* ---------- engine ---------- */
   var cache = {}, cacheN = 0, LETTER = /[A-Za-z\u1780-\u17FF]/;

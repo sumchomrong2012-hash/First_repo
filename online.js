@@ -23,7 +23,7 @@ const OL_ERR = {
   bad_ply: 'Game was out of sync — reloading.', game_not_active: 'This game is not active.',
   not_in_room: 'You are not a player in this room.', name_taken: 'That display name is taken.',
   bad_name: 'Display name must be 2–24 characters.', not_expired: 'Time has not expired yet.',
-  no_offer: 'There is no draw offer to answer.', bad_setup: 'That setup is not allowed.', passkey_required: 'This room needs a passkey.', wrong_passkey: 'Wrong passkey.', bad_passkey: 'Passkey must be 2–20 characters.', user_not_found: 'No player has that display name.', cannot_add_self: 'You cannot add yourself.', already_friends: 'You are already friends.', already_requested: 'Request already sent.', not_friends: 'You can only invite friends.', invite_not_found: 'That invitation is no longer valid.', too_many_invites: 'Too many pending invitations.', setup_done: 'You already finished your setup.', no_setup: 'The setup phase is over.', setup_pending: 'Both players must finish setting up first.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
+  no_offer: 'There is no draw offer to answer.', bad_setup: 'That setup is not allowed.', passkey_required: 'This room needs a passcode.', wrong_passkey: 'Wrong passcode.', bad_passkey: 'Passcode must be 2–20 characters.', user_not_found: 'No player has that display name.', cannot_add_self: 'You cannot add yourself.', already_friends: 'You are already friends.', already_requested: 'Request already sent.', not_friends: 'You can only invite friends.', invite_not_found: 'That invitation is no longer valid.', too_many_invites: 'Too many pending invitations.', setup_done: 'You already finished your setup.', no_setup: 'The setup phase is over.', setup_pending: 'Both players must finish setting up first.', bad_avatar: 'That picture cannot be used.', no_profile: 'Profile missing — sign out and in again.'
 };
 function olAlert(msg) { olToast('⚠️ ' + msg); }
 function olErr(e) { const m = (e && e.message) || String(e); for (const k in OL_ERR) if (m.includes(k)) return OL_ERR[k]; return m; }
@@ -147,7 +147,7 @@ async function olLoadProfile() {
   sbProfile = data || { display_name: (sbUser.email || 'Player').split('@')[0], wins: 0, losses: 0, draws: 0 };
   olAvatarCache[sbUser.id] = sbProfile.avatar || null;
 }
-function olSyncMenuClass() { const on = ['lobby-modal', 'auth-modal', 'friends-modal', 'pass-modal', 'notif-modal', 'pview-modal', 'profile-modal', 'dm-modal'].some(id => { const e = olById(id); return e && e.classList.contains('active'); }); document.body.classList.toggle('ol-menu-open', on); }
+function olSyncMenuClass() { const on = ['lobby-modal', 'auth-modal', 'friends-modal', 'pass-modal', 'pc-modal', 'notif-modal', 'pview-modal', 'profile-modal', 'dm-modal'].some(id => { const e = olById(id); return e && e.classList.contains('active'); }); document.body.classList.toggle('ol-menu-open', on); }
 function olOpenAuth(tab) { olAuthTab(tab || 'in'); olById('auth-msg').textContent = ''; olById('auth-modal').classList.add('active'); olSyncMenuClass(); }
 function olCloseAuth() { olById('auth-modal').classList.remove('active'); olSyncMenuClass(); }
 function olAuthTab(t) {
@@ -290,7 +290,26 @@ async function olCreateRoomRpc(args, turnSec) {
   }
   return res;
 }
-async function olCreateRoom() {
+/* "Create room" asks first: with a passcode or without */
+function olCreateRoom() {
+  if (!olInit() || !sbUser) { olOpenAuth(); return; }
+  olById('pc-input').value = ''; olById('pc-msg').textContent = '';
+  olById('pc-input-wrap').style.display = 'none'; olById('pc-confirm').style.display = 'none'; olById('pc-choice').style.display = 'flex';
+  olById('pc-modal').classList.add('active'); olSyncMenuClass();
+}
+function olPcClose() { olById('pc-modal').classList.remove('active'); olSyncMenuClass(); }
+function olPcNo() { olPcClose(); olCreateRoomNow(''); }
+function olPcYes() {
+  olById('pc-choice').style.display = 'none'; olById('pc-input-wrap').style.display = 'flex'; olById('pc-confirm').style.display = 'flex';
+  olById('pc-msg').textContent = ''; setTimeout(() => { try { olById('pc-input').focus(); } catch (e) {} }, 200);
+}
+function olPcBack() { olById('pc-input-wrap').style.display = 'none'; olById('pc-confirm').style.display = 'none'; olById('pc-choice').style.display = 'flex'; }
+function olPcConfirm() {
+  const v = olById('pc-input').value.trim();
+  if (v.length < 2 || v.length > 20) { olById('pc-msg').textContent = 'Passcode must be 2–20 characters.'; return; }
+  olPcClose(); olCreateRoomNow(v);
+}
+async function olCreateRoomNow(pass) {
   const btn = olById('ol-create-btn'); btn.disabled = true;
   try {
     try { const { data: mine } = await sb.rpc('my_rooms'); for (const r of (mine || [])) { if (r.status === 'waiting' && r.host_id === sbUser.id) await sb.rpc('resign', { p_room: r.id }); } } catch (e) {}   // one open room at a time
@@ -298,11 +317,9 @@ async function olCreateRoom() {
       p_color: olById('ol-new-color').value, p_minutes: Number(olById('ol-new-time').value),
       p_first_turn: olById('ol-new-first').value, p_public: olById('ol-new-public').checked
     };
-    const pass = olById('ol-new-pass').value.trim();
     if (pass) { if (pass.length < 2) throw new Error('bad_passkey'); args.p_passkey = pass; }
     const { data, error } = await olCreateRoomRpc(args, Number(olById('ol-new-turn').value) || 0);
     if (error) throw error;
-    olById('ol-new-pass').value = '';
     await olEnterRoom(data);
   } catch (e) { olAlert(olErr(e)); }
   btn.disabled = false;
@@ -318,30 +335,30 @@ async function olJoinByCode(code, passkey, fromBox) {
     const { data, error } = await sb.rpc('join_room', passkey ? { p_code: code, p_passkey: passkey } : { p_code: code });
     if (error) throw error;
     olJoinMsg(''); olClosePass();
-    const inp = olById('ol-join-code'); if (inp) inp.value = ''; const ip = olById('ol-join-pass'); if (ip) ip.value = '';
+    const inp = olById('ol-join-code'); if (inp) inp.value = '';
     await olEnterRoom(data);
   } catch (e) {
     const m = (e && e.message) || '';
     if (/passkey_required/.test(m)) { olJoinMsg(''); olAskPasskey(code, false); return; }
-    if (/wrong_passkey/.test(m)) { if (fromBox) { olJoinMsg('Wrong passkey.'); return; } olJoinMsg(''); olAskPasskey(code, true); return; }
+    if (/wrong_passkey/.test(m)) { olJoinMsg(''); olAskPasskey(code, true); return; }
     olJoinMsg('Could not join: ' + olErr(e)); olAlert(olErr(e));
     if (!olById('lobby-modal').classList.contains('active')) openLobby();
   }
 }
 function olAskPasskey(code, wrong) {
   olPassCode = code;
-  olById('pass-text').textContent = `Room ${code} is locked. Ask the host for the passkey.`;
-  olById('pass-msg').textContent = wrong ? 'Wrong passkey — try again.' : ''; olById('pass-input').value = '';
+  olById('pass-text').textContent = `Room ${code} is locked. Ask the host for the passcode.`;
+  olById('pass-msg').textContent = wrong ? 'Wrong passcode — try again.' : ''; olById('pass-input').value = '';
   olById('pass-modal').classList.add('active'); olSyncMenuClass();
   setTimeout(() => { try { olById('pass-input').focus(); } catch (e) {} }, 200);
 }
 function olClosePass() { olById('pass-modal').classList.remove('active'); olSyncMenuClass(); }
 function olPassSubmit() {
   const v = olById('pass-input').value.trim();
-  if (!v) { olById('pass-msg').textContent = 'Type the passkey.'; return; }
+  if (!v) { olById('pass-msg').textContent = 'Type the passcode.'; return; }
   olJoinByCode(olPassCode, v);
 }
-function olJoinFromInput() { olJoinByCode(olById('ol-join-code').value, olById('ol-join-pass').value.trim() || undefined, true); }
+function olJoinFromInput() { olJoinByCode(olById('ol-join-code').value); }
 function olRoomRow(r, mode) {
   const row = olEl('div', 'ol-row'); const meta = olEl('div', 'ol-meta');
   const mine = mode === 'mine';
@@ -1521,7 +1538,7 @@ window.addEventListener('DOMContentLoaded', () => {
   olFillCreateForm(); olAuthTab('in');
   ['auth-email', 'auth-pass', 'auth-name'].forEach(id => olById(id).addEventListener('keydown', e => { if (e.key === 'Enter') olAuthSubmit(); }));
   olById('ol-join-code').addEventListener('keydown', e => { if (e.key === 'Enter') olJoinFromInput(); });
-  olById('ol-join-pass').addEventListener('keydown', e => { if (e.key === 'Enter') olJoinFromInput(); });
+  olById('pc-input').addEventListener('keydown', e => { if (e.key === 'Enter') olPcConfirm(); });
   const code = new URLSearchParams(location.search).get('join');
   if (code) {
     onlinePendingJoin = code.trim().toUpperCase();
