@@ -171,6 +171,8 @@
   E('Do you want a passcode for this room? Players will need it to join.', 'តើអ្នកចង់ដាក់លេខសម្ងាត់សម្រាប់បន្ទប់នេះទេ? អ្នកលេងត្រូវការវាដើម្បីចូល។');
   E('No passcode', 'គ្មានលេខសម្ងាត់'); E('Yes, enter passcode', 'បាទ/ចាស បញ្ចូលលេខសម្ងាត់'); E('Passcode (2–20 characters)', 'លេខសម្ងាត់ (២–២០ តួអក្សរ)'); E('Passcode must be 2–20 characters.', 'លេខសម្ងាត់ត្រូវមាន ២–២០ តួអក្សរ។'); E('Create room', 'បង្កើតបន្ទប់');
 
+  E('Cartoon Wood (new)', 'កូនអុកគំនូរឈើ (ថ្មី)'); E('Light Wood Grid (new)', 'ក្តារឈើស្រាល (ថ្មី)');
+
   /* ---------- engine ---------- */
   var cache = {}, cacheN = 0, LETTER = /[A-Za-z\u1780-\u17FF]/;
   function lookup(src, depth) {
